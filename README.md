@@ -17,7 +17,7 @@ For example:
 ---
 
 ## Project layout
-
+```
 Arduboy2GBA/
 ├── transpiler/
 │   ├── main.py
@@ -40,7 +40,7 @@ Arduboy2GBA/
 ├── examples/
 ├── Makefile
 └── README.md
-
+```
 ## Current capabilities
 
 ### Transpiler

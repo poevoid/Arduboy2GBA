@@ -4,7 +4,7 @@ HEADER = """
 #include "../runtime/arduboy_compat.h"
 """
 
-MAPPINGS = {
+DIRECT_MAPPINGS = {
     # Arduboy2 core
     "arduboy.drawPixel": "ab_drawPixel",
     "arduboy.drawBitmap": "ab_drawBitmap",
@@ -13,13 +13,21 @@ MAPPINGS = {
     "arduboy.display": "ab_display",
     "arduboy.pollButtons": "ab_pollButtons",
     "arduboy.pressed": "ab_pressed",
-    "arduboy.tone": "ab_tone",
+    "arduboy.setCursor": "ab_setCursor",
+    "arduboy.setTextSize": "ab_setTextSize",
+    "arduboy.invert": "ab_invert",
+    "arduboy.beginNoLogo": "ab_beginNoLogo",
+    "arduboy.begin": "ab_begin",
+    "arduboy.setFrameRate": "ab_setFrameRate",
+    "arduboy.initRandomSeed": "ab_initRandomSeed",
+    "arduboy.nextFrame": "ab_nextFrame",
 
     # Arduboy classic
     "arduboy.setPixel": "ab_drawPixel",
     "arduboy.drawScreen": "ab_display",
     "arduboy.clearDisplay": "ab_clear",
     "arduboy.getInput": "ab_pollButtons",
+    "arduboy.blank": "ab_clear",
 
     # Graphics primitives
     "arduboy.drawFastHLine": "ab_drawFastHLine",
@@ -27,10 +35,8 @@ MAPPINGS = {
     "arduboy.drawRect": "ab_drawRect",
     "arduboy.fillRect": "ab_fillRect",
     "arduboy.fillScreen": "ab_fillScreen",
-    "arduboy.setCursor": "ab_setCursor",
-    "arduboy.print": "ab_print",
 
-    # Common sprite APIs
+    # Sprites APIs
     "Sprites::drawOverwrite": "ab_drawOverwrite",
     "Sprites::drawSelfMasked": "ab_drawSelfMasked",
     "Sprites::drawErase": "ab_drawErase",
@@ -43,18 +49,22 @@ MAPPINGS = {
     "sprites.drawPlusMask": "ab_drawPlusMask",
     "sprites.drawExternalMask": "ab_drawExternalMask",
 
-    # Playtune
+    # Audio
+    "arduboy.tunes.tone": "ab_tone",
+    "arduboy.tunes.playScore": "ab_playScore",
+    "arduboy.tunes.stopScore": "ab_stopScore",
     "tunes.playScore": "ab_playScore",
     "tunes.stopScore": "ab_stopScore",
+    "tunes.tone": "ab_tone",
 }
 
 INCLUDE_PATTERNS = [
-    r'^\s*#include\s*<Arduboy2\.h>\s*$',
-    r'^\s*#include\s*<Arduboy\.h>\s*$',
-    r'^\s*#include\s*<ArduboyPlaytune\.h>\s*$',
-    r'^\s*#include\s*<ArduboyPlayTunes\.h>\s*$',
-    r'^\s*#include\s*<Playtune\.h>\s*$',
-    r'^\s*#include\s*<Sprites\.h>\s*$',
+    r'^\s*#include\s*[<"]Arduboy2\.h[>"]\s*$',
+    r'^\s*#include\s*[<"]Arduboy\.h[>"]\s*$',
+    r'^\s*#include\s*[<"]ArduboyPlaytune\.h[>"]\s*$',
+    r'^\s*#include\s*[<"]ArduboyPlayTunes\.h[>"]\s*$',
+    r'^\s*#include\s*[<"]Playtune\.h[>"]\s*$',
+    r'^\s*#include\s*[<"]Sprites\.h[>"]\s*$',
 ]
 
 DECLARATION_PATTERNS = [
@@ -66,6 +76,7 @@ DECLARATION_PATTERNS = [
     r'^\s*Sprites\s+\w+\s*;\s*$',
 ]
 
+
 def strip_arduino_specific_lines(code):
     for pattern in INCLUDE_PATTERNS:
         code = re.sub(pattern, '', code, flags=re.MULTILINE)
@@ -73,13 +84,29 @@ def strip_arduino_specific_lines(code):
     for pattern in DECLARATION_PATTERNS:
         code = re.sub(pattern, '', code, flags=re.MULTILINE)
 
-    code = re.sub(r'\b\w+\.begin\s*\(\s*\)\s*;', '', code)
-    code = re.sub(r'\b\w+\.boot\s*\(\s*\)\s*;', '', code)
-    code = re.sub(r'\b\w+\.bootLCD\s*\(\s*\)\s*;', '', code)
-    code = re.sub(r'\b\w+\.audio\.on\s*\(\s*\)\s*;', '', code)
-    code = re.sub(r'\b\w+\.audio\.off\s*\(\s*\)\s*;', '', code)
+    return code
+
+
+def normalize_arduino_types(code):
+    code = re.sub(r'\bboolean\b', 'bool', code)
+    code = re.sub(r'\bbyte\b', 'unsigned char', code)
+
+    code = re.sub(r'\bconst\s+String\b', 'const char*', code)
+    code = re.sub(r'\bString\b', 'char*', code)
 
     return code
+
+
+def normalize_arduino_helpers(code):
+    code = re.sub(r'\brandom\s*\(', 'ab_random(', code)
+    code = re.sub(r'\bdelay\s*\(', 'ab_delay(', code)
+    return code
+
+
+def normalize_print_calls(code):
+    code = re.sub(r'\barduboy\.print\s*\(', 'AB_PRINT(', code)
+    return code
+
 
 def normalize_structure(code):
     if "void setup()" not in code:
@@ -90,14 +117,62 @@ def normalize_structure(code):
 
     return code
 
-def apply_mappings(code):
-    for k in sorted(MAPPINGS.keys(), key=len, reverse=True):
-        code = code.replace(k, MAPPINGS[k])
+
+def apply_direct_mappings(code):
+    for k in sorted(DIRECT_MAPPINGS.keys(), key=len, reverse=True):
+        code = code.replace(k, DIRECT_MAPPINGS[k])
     return code
+
+
+def generate_prototypes(code):
+    pattern = re.compile(
+        r'^\s*([A-Za-z_][\w\s\*\&]*?)\s+([A-Za-z_]\w*)\s*\((.*?)\)\s*\{',
+        re.MULTILINE | re.DOTALL
+    )
+
+    keywords = {"if", "for", "while", "switch"}
+    prototypes = []
+
+    for m in pattern.finditer(code):
+        ret_type = m.group(1).strip()
+        name = m.group(2).strip()
+        args = m.group(3).strip()
+
+        if name in keywords:
+            continue
+
+        prototype = f"{ret_type} {name}({args});"
+        if prototype not in prototypes:
+            prototypes.append(prototype)
+
+    return prototypes
+
+
+def build_prelude(prototypes):
+    lines = [
+        HEADER.strip(),
+        "",
+        "#include <math.h>",
+        "",
+    ]
+
+    if prototypes:
+        lines.extend(prototypes)
+        lines.append("")
+
+    return "\n".join(lines) + "\n"
+
 
 def map_code(parsed):
     code = parsed.raw_code
     code = strip_arduino_specific_lines(code)
+    code = normalize_arduino_types(code)
+    code = normalize_arduino_helpers(code)
+    code = normalize_print_calls(code)
     code = normalize_structure(code)
-    code = apply_mappings(code)
-    return HEADER + "\n" + code
+    code = apply_direct_mappings(code)
+
+    prototypes = generate_prototypes(code)
+    prelude = build_prelude(prototypes)
+
+    return prelude + "\n" + code

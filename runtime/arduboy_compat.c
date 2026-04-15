@@ -3,48 +3,243 @@
 #include "input.h"
 #include "audio.h"
 
-void ab_init() { gfx_init(); }
-void ab_clear() { gfx_clear(); }
-void ab_display() { gfx_present(); }
+#include <stdlib.h>
+#include <stdio.h>
+#include <gba_systemcalls.h>
 
-void ab_drawPixel(int x, int y, u16 c) { gfx_draw_pixel(x, y, c); }
-void ab_drawFastHLine(int x, int y, int w, u16 c) { gfx_draw_fast_hline(x, y, w, c); }
-void ab_drawFastVLine(int x, int y, int h, u16 c) { gfx_draw_fast_vline(x, y, h, c); }
+static int g_frame_rate = 60;
+static int g_frame_duration_vblanks = 1;
+static int g_frame_counter = 0;
+static float g_time_scale = 1.0f;
 
-void ab_drawRect(int x, int y, int w, int h, u16 c) { gfx_draw_rect(x, y, w, h, c); }
-void ab_fillRect(int x, int y, int w, int h, u16 c) { gfx_fill_rect(x, y, w, h, c); }
-void ab_fillScreen(u16 c) { gfx_fill_screen(c); }
-
-void ab_drawBitmap(int x, int y, const unsigned char* b, int w, int h) {
-    gfx_draw_bitmap(x, y, b, w, h);
+void ab_setTimeScale(float scale) {
+    if (scale <= 0.0f) {
+        scale = 1.0f;
+    }
+    g_time_scale = scale;
 }
 
-void ab_drawOverwrite(int x, int y, const unsigned char* sprite, int frame) {
-    gfx_draw_sprite_overwrite(x, y, sprite, frame);
+float ab_getTimeScale(void) {
+    return g_time_scale;
 }
 
-void ab_drawSelfMasked(int x, int y, const unsigned char* sprite, int frame) {
-    gfx_draw_sprite_self_masked(x, y, sprite, frame);
+void ab_begin(void) {
+    gfx_init();
+    audio_init();
+    input_poll();
+    g_frame_rate = 60;
+    g_frame_duration_vblanks = 1;
+    g_frame_counter = 0;
 }
 
-void ab_drawErase(int x, int y, const unsigned char* sprite, int frame) {
-    gfx_draw_sprite_erase(x, y, sprite, frame);
+void ab_beginNoLogo(void) {
+    ab_begin();
 }
 
-void ab_drawPlusMask(int x, int y, const unsigned char* sprite, int frame) {
-    gfx_draw_sprite_plus_mask(x, y, sprite, frame);
+void ab_initRandomSeed(void) {
+    srand(1);
 }
 
-void ab_drawExternalMask(int x, int y, const unsigned char* sprite, const unsigned char* mask, int frame, int mask_frame) {
-    gfx_draw_sprite_external_mask(x, y, sprite, mask, frame, mask_frame);
+void ab_clear(void) {
+    gfx_clear();
 }
 
-void ab_setCursor(int x, int y) { gfx_set_cursor(x, y); }
-void ab_print(const char* s) { gfx_print(s); }
+void ab_display(void) {
+    gfx_present();
+}
 
-u16 ab_pollButtons() { return input_poll(); }
-int ab_pressed(u16 k) { return input_pressed(k); }
+void ab_drawPixel(int x, int y, int c) {
+    gfx_draw_pixel(x, y, c);
+}
 
-void ab_tone(int f, int d) { audio_tone(f, d); }
-void ab_playScore(const unsigned char* s) { audio_play_score(s); }
-void ab_stopScore() { audio_stop_score(); }
+void ab_drawFastHLine(int x, int y, int w, int c) {
+    gfx_draw_fast_hline(x, y, w, c);
+}
+
+void ab_drawFastVLine(int x, int y, int h, int c) {
+    gfx_draw_fast_vline(x, y, h, c);
+}
+
+void ab_drawRect(int x, int y, int w, int h, int c) {
+    gfx_draw_rect(x, y, w, h, c);
+}
+
+void ab_fillRect(int x, int y, int w, int h, int c) {
+    gfx_fill_rect(x, y, w, h, c);
+}
+
+void ab_setCursor(int x, int y) {
+    gfx_set_cursor(x, y);
+}
+
+void ab_setTextSize(int s) {
+    gfx_set_text_size(s);
+}
+
+void ab_setTextWrap(bool w) {
+    gfx_set_text_wrap(w);
+}
+
+bool ab_getTextWrap(void) {
+    return gfx_get_text_wrap();
+}
+
+void ab_setTextRawMode(bool r) {
+    gfx_set_text_raw(r);
+}
+
+bool ab_getTextRawMode(void) {
+    return gfx_get_text_raw();
+}
+
+void ab_setTextColor(int c) {
+    gfx_set_text_color(c);
+}
+
+void ab_setTextBackground(int c) {
+    gfx_set_text_bg(c);
+}
+
+void ab_print(const char* s) {
+    gfx_write_string(s);
+}
+
+void ab_print(int v) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", v);
+    gfx_write_string(buf);
+}
+
+void ab_print(char c) {
+    gfx_write_char(c);
+}
+
+void ab_print(float v) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%.2f", v);
+    gfx_write_string(buf);
+}
+
+void ab_pollButtons(void) {
+    input_poll();
+}
+
+bool ab_pressed(u16 key) {
+    return input_pressed(key);
+}
+
+bool ab_justPressed(u16 key) {
+    return input_just_pressed(key);
+}
+
+void ab_setFrameRate(int fps) {
+    int scaled_fps;
+    float vblank_frames;
+
+    if (fps <= 0) {
+        fps = 60;
+    }
+
+    scaled_fps = (int)((float)fps / g_time_scale + 0.5f);
+
+    if (scaled_fps < 1) {
+        scaled_fps = 1;
+    }
+    if (scaled_fps > 60) {
+        scaled_fps = 60;
+    }
+
+    g_frame_rate = scaled_fps;
+
+    vblank_frames = 60.0f / (float)scaled_fps;
+    g_frame_duration_vblanks = (int)(vblank_frames + 0.5f);
+    if (g_frame_duration_vblanks < 1) {
+        g_frame_duration_vblanks = 1;
+    }
+
+    g_frame_counter = 0;
+}
+
+bool ab_nextFrame(void) {
+    g_frame_counter++;
+
+    if (g_frame_counter >= g_frame_duration_vblanks) {
+        g_frame_counter = 0;
+        VBlankIntrWait();
+        input_poll();
+        audio_update();
+        return true;
+    }
+
+    VBlankIntrWait();
+    input_poll();
+    audio_update();
+    return false;
+}
+
+void ab_delay(int ms) {
+    int scaled_ms;
+    int frames;
+    int i;
+
+    if (ms <= 0) {
+        return;
+    }
+
+    scaled_ms = (int)((float)ms * g_time_scale + 0.5f);
+    if (scaled_ms < 1) {
+        scaled_ms = 1;
+    }
+
+    frames = (scaled_ms + 16) / 17;
+    if (frames < 1) {
+        frames = 1;
+    }
+
+    for (i = 0; i < frames; i++) {
+        VBlankIntrWait();
+        input_poll();
+        audio_update();
+    }
+}
+
+void ab_idle(void) {
+    VBlankIntrWait();
+    input_poll();
+    audio_update();
+}
+
+int ab_random(int min, int max) {
+    if (max <= min) {
+        return min;
+    }
+    return min + rand() % (max - min);
+}
+
+void ab_tone(int freq, int duration) {
+    audio_tone(freq, duration);
+}
+
+void ab_playScore(const unsigned char* score) {
+    audio_play_score(score);
+}
+
+void ab_stopScore(void) {
+    audio_stop_score();
+}
+
+int ab_get_frame_duration_ms(void) {
+    return (g_frame_rate > 0) ? (1000 / g_frame_rate) : 16;
+}
+
+int ab_get_dropped_frames(void) {
+    return 0;
+}
+
+int ab_get_last_present_ticks(void) {
+    return (int)gfx_get_last_present_ticks();
+}
+
+int ab_get_max_present_ticks(void) {
+    return (int)gfx_get_max_present_ticks();
+}

@@ -1,215 +1,237 @@
 #include "graphics.h"
 #include <gba_video.h>
-#include <gba_systemcalls.h>
+#include <gba_dma.h>
 #include <string.h>
+#include <stdio.h>
 
-#define WIDTH 240
-#define HEIGHT 160
+#define GBA_WIDTH 240
+#define GBA_HEIGHT 160
 #define ARDU_W 128
 #define ARDU_H 64
 
 #define COLOR_BLACK 0x0000
 #define COLOR_WHITE 0x7FFF
 
-static u16* buffer = (u16*)0x6000000;
-static int ox = (WIDTH - ARDU_W) / 2;
-static int oy = (HEIGHT - ARDU_H) / 2;
+static volatile u16* vram = (volatile u16*)0x6000000;
+static u16 backbuffer[ARDU_W * ARDU_H] __attribute__((section(".ewram"), aligned(4)));
+static unsigned char dirty_rows[ARDU_H] __attribute__((section(".ewram"), aligned(4)));
+
+static int ox = (GBA_WIDTH - ARDU_W) / 2;
+static int oy = (GBA_HEIGHT - ARDU_H) / 2;
 
 static int cursor_x = 0;
 static int cursor_y = 0;
+static int text_size = 1;
+static bool text_wrap = true;
+static bool text_raw = false;
+static int text_color = 1;
+static int text_bg = 0;
+static bool full_redraw_needed = true;
 
-/*
-  Standard Arduino/Arduboy-style 5x7 glyphs rendered into a 6x8 cell.
-  ASCII 0x20..0x7F, 5 bytes per glyph, each byte is one column, LSB at top.
-*/
 static const unsigned char font5x7[96][5] = {
-    {0x00,0x00,0x00,0x00,0x00}, /* space */
-    {0x00,0x00,0x5F,0x00,0x00}, /* ! */
-    {0x00,0x07,0x00,0x07,0x00}, /* " */
-    {0x14,0x7F,0x14,0x7F,0x14}, /* # */
-    {0x24,0x2A,0x7F,0x2A,0x12}, /* $ */
-    {0x23,0x13,0x08,0x64,0x62}, /* % */
-    {0x36,0x49,0x55,0x22,0x50}, /* & */
-    {0x00,0x05,0x03,0x00,0x00}, /* ' */
-    {0x00,0x1C,0x22,0x41,0x00}, /* ( */
-    {0x00,0x41,0x22,0x1C,0x00}, /* ) */
-    {0x14,0x08,0x3E,0x08,0x14}, /* * */
-    {0x08,0x08,0x3E,0x08,0x08}, /* + */
-    {0x00,0x50,0x30,0x00,0x00}, /* , */
-    {0x08,0x08,0x08,0x08,0x08}, /* - */
-    {0x00,0x60,0x60,0x00,0x00}, /* . */
-    {0x20,0x10,0x08,0x04,0x02}, /* / */
-    {0x3E,0x51,0x49,0x45,0x3E}, /* 0 */
-    {0x00,0x42,0x7F,0x40,0x00}, /* 1 */
-    {0x42,0x61,0x51,0x49,0x46}, /* 2 */
-    {0x21,0x41,0x45,0x4B,0x31}, /* 3 */
-    {0x18,0x14,0x12,0x7F,0x10}, /* 4 */
-    {0x27,0x45,0x45,0x45,0x39}, /* 5 */
-    {0x3C,0x4A,0x49,0x49,0x30}, /* 6 */
-    {0x01,0x71,0x09,0x05,0x03}, /* 7 */
-    {0x36,0x49,0x49,0x49,0x36}, /* 8 */
-    {0x06,0x49,0x49,0x29,0x1E}, /* 9 */
-    {0x00,0x36,0x36,0x00,0x00}, /* : */
-    {0x00,0x56,0x36,0x00,0x00}, /* ; */
-    {0x08,0x14,0x22,0x41,0x00}, /* < */
-    {0x14,0x14,0x14,0x14,0x14}, /* = */
-    {0x00,0x41,0x22,0x14,0x08}, /* > */
-    {0x02,0x01,0x51,0x09,0x06}, /* ? */
-    {0x32,0x49,0x79,0x41,0x3E}, /* @ */
-    {0x7E,0x11,0x11,0x11,0x7E}, /* A */
-    {0x7F,0x49,0x49,0x49,0x36}, /* B */
-    {0x3E,0x41,0x41,0x41,0x22}, /* C */
-    {0x7F,0x41,0x41,0x22,0x1C}, /* D */
-    {0x7F,0x49,0x49,0x49,0x41}, /* E */
-    {0x7F,0x09,0x09,0x09,0x01}, /* F */
-    {0x3E,0x41,0x49,0x49,0x7A}, /* G */
-    {0x7F,0x08,0x08,0x08,0x7F}, /* H */
-    {0x00,0x41,0x7F,0x41,0x00}, /* I */
-    {0x20,0x40,0x41,0x3F,0x01}, /* J */
-    {0x7F,0x08,0x14,0x22,0x41}, /* K */
-    {0x7F,0x40,0x40,0x40,0x40}, /* L */
-    {0x7F,0x02,0x0C,0x02,0x7F}, /* M */
-    {0x7F,0x04,0x08,0x10,0x7F}, /* N */
-    {0x3E,0x41,0x41,0x41,0x3E}, /* O */
-    {0x7F,0x09,0x09,0x09,0x06}, /* P */
-    {0x3E,0x41,0x51,0x21,0x5E}, /* Q */
-    {0x7F,0x09,0x19,0x29,0x46}, /* R */
-    {0x46,0x49,0x49,0x49,0x31}, /* S */
-    {0x01,0x01,0x7F,0x01,0x01}, /* T */
-    {0x3F,0x40,0x40,0x40,0x3F}, /* U */
-    {0x1F,0x20,0x40,0x20,0x1F}, /* V */
-    {0x3F,0x40,0x38,0x40,0x3F}, /* W */
-    {0x63,0x14,0x08,0x14,0x63}, /* X */
-    {0x07,0x08,0x70,0x08,0x07}, /* Y */
-    {0x61,0x51,0x49,0x45,0x43}, /* Z */
-    {0x00,0x7F,0x41,0x41,0x00}, /* [ */
-    {0x02,0x04,0x08,0x10,0x20}, /* \ */
-    {0x00,0x41,0x41,0x7F,0x00}, /* ] */
-    {0x04,0x02,0x01,0x02,0x04}, /* ^ */
-    {0x40,0x40,0x40,0x40,0x40}, /* _ */
-    {0x00,0x01,0x02,0x04,0x00}, /* ` */
-    {0x20,0x54,0x54,0x54,0x78}, /* a */
-    {0x7F,0x48,0x44,0x44,0x38}, /* b */
-    {0x38,0x44,0x44,0x44,0x20}, /* c */
-    {0x38,0x44,0x44,0x48,0x7F}, /* d */
-    {0x38,0x54,0x54,0x54,0x18}, /* e */
-    {0x08,0x7E,0x09,0x01,0x02}, /* f */
-    {0x08,0x14,0x54,0x54,0x3C}, /* g */
-    {0x7F,0x08,0x04,0x04,0x78}, /* h */
-    {0x00,0x44,0x7D,0x40,0x00}, /* i */
-    {0x20,0x40,0x44,0x3D,0x00}, /* j */
-    {0x7F,0x10,0x28,0x44,0x00}, /* k */
-    {0x00,0x41,0x7F,0x40,0x00}, /* l */
-    {0x7C,0x04,0x18,0x04,0x78}, /* m */
-    {0x7C,0x08,0x04,0x04,0x78}, /* n */
-    {0x38,0x44,0x44,0x44,0x38}, /* o */
-    {0x7C,0x14,0x14,0x14,0x08}, /* p */
-    {0x08,0x14,0x14,0x18,0x7C}, /* q */
-    {0x7C,0x08,0x04,0x04,0x08}, /* r */
-    {0x48,0x54,0x54,0x54,0x20}, /* s */
-    {0x04,0x3F,0x44,0x40,0x20}, /* t */
-    {0x3C,0x40,0x40,0x20,0x7C}, /* u */
-    {0x1C,0x20,0x40,0x20,0x1C}, /* v */
-    {0x3C,0x40,0x30,0x40,0x3C}, /* w */
-    {0x44,0x28,0x10,0x28,0x44}, /* x */
-    {0x0C,0x50,0x50,0x50,0x3C}, /* y */
-    {0x44,0x64,0x54,0x4C,0x44}, /* z */
-    {0x00,0x08,0x36,0x41,0x00}, /* { */
-    {0x00,0x00,0x7F,0x00,0x00}, /* | */
-    {0x00,0x41,0x36,0x08,0x00}, /* } */
-    {0x08,0x08,0x2A,0x1C,0x08}, /* ~ */
-    {0x7F,0x41,0x5D,0x49,0x7F}  /* DEL fallback */
+    {0x00,0x00,0x00,0x00,0x00},
+    {0x00,0x00,0x5F,0x00,0x00},
+    {0x00,0x07,0x00,0x07,0x00},
+    {0x14,0x7F,0x14,0x7F,0x14},
+    {0x24,0x2A,0x7F,0x2A,0x12},
+    {0x23,0x13,0x08,0x64,0x62},
+    {0x36,0x49,0x56,0x20,0x50},
+    {0x00,0x08,0x07,0x03,0x00},
+    {0x00,0x1C,0x22,0x41,0x00},
+    {0x00,0x41,0x22,0x1C,0x00},
+    {0x2A,0x1C,0x7F,0x1C,0x2A},
+    {0x08,0x08,0x3E,0x08,0x08},
+    {0x00,0x80,0x70,0x30,0x00},
+    {0x08,0x08,0x08,0x08,0x08},
+    {0x00,0x00,0x60,0x60,0x00},
+    {0x20,0x10,0x08,0x04,0x02},
+    {0x3E,0x51,0x49,0x45,0x3E},
+    {0x00,0x42,0x7F,0x40,0x00},
+    {0x72,0x49,0x49,0x49,0x46},
+    {0x21,0x41,0x49,0x4D,0x33},
+    {0x18,0x14,0x12,0x7F,0x10},
+    {0x27,0x45,0x45,0x45,0x39},
+    {0x3C,0x4A,0x49,0x49,0x31},
+    {0x41,0x21,0x11,0x09,0x07},
+    {0x36,0x49,0x49,0x49,0x36},
+    {0x46,0x49,0x49,0x29,0x1E},
+    {0x00,0x00,0x14,0x00,0x00},
+    {0x00,0x40,0x34,0x00,0x00},
+    {0x00,0x08,0x14,0x22,0x41},
+    {0x14,0x14,0x14,0x14,0x14},
+    {0x00,0x41,0x22,0x14,0x08},
+    {0x02,0x01,0x59,0x09,0x06},
+    {0x3E,0x41,0x5D,0x59,0x4E},
+    {0x7C,0x12,0x11,0x12,0x7C},
+    {0x7F,0x49,0x49,0x49,0x36},
+    {0x3E,0x41,0x41,0x41,0x22},
+    {0x7F,0x41,0x41,0x41,0x3E},
+    {0x7F,0x49,0x49,0x49,0x41},
+    {0x7F,0x09,0x09,0x09,0x01},
+    {0x3E,0x41,0x41,0x51,0x73},
+    {0x7F,0x08,0x08,0x08,0x7F},
+    {0x00,0x41,0x7F,0x41,0x00},
+    {0x20,0x40,0x41,0x3F,0x01},
+    {0x7F,0x08,0x14,0x22,0x41},
+    {0x7F,0x40,0x40,0x40,0x40},
+    {0x7F,0x02,0x1C,0x02,0x7F},
+    {0x7F,0x04,0x08,0x10,0x7F},
+    {0x3E,0x41,0x41,0x41,0x3E},
+    {0x7F,0x09,0x09,0x09,0x06},
+    {0x3E,0x41,0x51,0x21,0x5E},
+    {0x7F,0x09,0x19,0x29,0x46},
+    {0x26,0x49,0x49,0x49,0x32},
+    {0x03,0x01,0x7F,0x01,0x03},
+    {0x3F,0x40,0x40,0x40,0x3F},
+    {0x1F,0x20,0x40,0x20,0x1F},
+    {0x3F,0x40,0x38,0x40,0x3F},
+    {0x63,0x14,0x08,0x14,0x63},
+    {0x03,0x04,0x78,0x04,0x03},
+    {0x61,0x59,0x49,0x4D,0x43},
+    {0x00,0x7F,0x41,0x41,0x41},
+    {0x02,0x04,0x08,0x10,0x20},
+    {0x41,0x41,0x41,0x7F,0x00},
+    {0x04,0x02,0x01,0x02,0x04},
+    {0x40,0x40,0x40,0x40,0x40},
+    {0x00,0x03,0x07,0x08,0x00},
+    {0x20,0x54,0x54,0x78,0x40},
+    {0x7F,0x28,0x44,0x44,0x38},
+    {0x38,0x44,0x44,0x44,0x28},
+    {0x38,0x44,0x44,0x28,0x7F},
+    {0x38,0x54,0x54,0x54,0x18},
+    {0x00,0x08,0x7E,0x09,0x02},
+    {0x18,0xA4,0xA4,0x9C,0x78},
+    {0x7F,0x08,0x04,0x04,0x78},
+    {0x00,0x44,0x7D,0x40,0x00},
+    {0x20,0x40,0x40,0x3D,0x00},
+    {0x7F,0x10,0x28,0x44,0x00},
+    {0x00,0x41,0x7F,0x40,0x00},
+    {0x7C,0x04,0x78,0x04,0x78},
+    {0x7C,0x08,0x04,0x04,0x78},
+    {0x38,0x44,0x44,0x44,0x38},
+    {0xFC,0x18,0x24,0x24,0x18},
+    {0x18,0x24,0x24,0x18,0xFC},
+    {0x7C,0x08,0x04,0x04,0x08},
+    {0x48,0x54,0x54,0x54,0x24},
+    {0x04,0x04,0x3F,0x44,0x24},
+    {0x3C,0x40,0x40,0x20,0x7C},
+    {0x1C,0x20,0x40,0x20,0x1C},
+    {0x3C,0x40,0x30,0x40,0x3C},
+    {0x44,0x28,0x10,0x28,0x44},
+    {0x4C,0x90,0x90,0x90,0x7C},
+    {0x44,0x64,0x54,0x4C,0x44},
+    {0x00,0x08,0x36,0x41,0x41},
+    {0x00,0x00,0x77,0x00,0x00},
+    {0x41,0x41,0x36,0x08,0x00},
+    {0x02,0x01,0x02,0x04,0x02},
+    {0x7C,0x44,0x44,0x44,0x7C}
 };
 
-static int bitmap_get_bit(const unsigned char* bmp, int w, int sx, int sy) {
-    int page = sy >> 3;
-    int bit = sy & 7;
-    int index = sx + (page * w);
-    return (bmp[index] >> bit) & 1;
+static inline u16 mono_to_color(int c) {
+    return c ? COLOR_WHITE : COLOR_BLACK;
 }
 
-static void draw_bitmap_core(int x, int y, const unsigned char* bmp, int w, int h, int transparent) {
-    int sx, sy;
-
-    if (!bmp || w <= 0 || h <= 0) return;
-
-    for (sy = 0; sy < h; sy++) {
-        for (sx = 0; sx < w; sx++) {
-            int pixel = bitmap_get_bit(bmp, w, sx, sy);
-            if (transparent) {
-                if (pixel) {
-                    gfx_draw_pixel(x + sx, y + sy, COLOR_WHITE);
-                }
-            } else {
-                gfx_draw_pixel(x + sx, y + sy, pixel ? COLOR_WHITE : COLOR_BLACK);
-            }
-        }
+static inline void wait_for_vblank(void) {
+    while (REG_VCOUNT >= 160) {
+    }
+    while (REG_VCOUNT < 160) {
     }
 }
 
-static int sprite_width(const unsigned char* sprite) {
-    return (int)sprite[0];
+static inline void dma_copy_row_16(const u16* src, volatile u16* dst, int count) {
+    REG_DMA3CNT = 0;
+    REG_DMA3SAD = (u32)src;
+    REG_DMA3DAD = (u32)dst;
+    REG_DMA3CNT = DMA_ENABLE | DMA16 | count;
 }
 
-static int sprite_height(const unsigned char* sprite) {
-    return (int)sprite[1];
+static inline void mark_row_dirty(int y) {
+    if (y >= 0 && y < ARDU_H) {
+        dirty_rows[y] = 1;
+    }
 }
 
-static int sprite_pages(int h) {
-    return (h + 7) >> 3;
-}
-
-static const unsigned char* sprite_frame_ptr(const unsigned char* sprite, int frame) {
-    int w = sprite_width(sprite);
-    int h = sprite_height(sprite);
-    int bytes_per_frame = w * sprite_pages(h);
-    return sprite + 2 + (frame * bytes_per_frame);
-}
-
-static const unsigned char* plus_mask_frame_ptr(const unsigned char* sprite, int frame) {
-    int w = sprite_width(sprite);
-    int h = sprite_height(sprite);
-    int bytes_per_frame = w * sprite_pages(h) * 2;
-    return sprite + 2 + (frame * bytes_per_frame);
-}
-
-void gfx_init() {
+void gfx_init(void) {
     REG_DISPCNT = MODE_3 | BG2_ENABLE;
+    gfx_clear();
 }
 
-void gfx_clear() {
-    memset(buffer, 0, WIDTH * HEIGHT * 2);
+void gfx_clear(void) {
+    memset(backbuffer, 0, sizeof(backbuffer));
+    memset(dirty_rows, 1, sizeof(dirty_rows));
+    full_redraw_needed = true;
+    cursor_x = 0;
+    cursor_y = 0;
 }
 
-void gfx_present() {
-    VBlankIntrWait();
+void gfx_present(void) {
+    int y;
+
+    for (y = 0; y < ARDU_H; y++) {
+        if (full_redraw_needed || dirty_rows[y]) {
+            u16* src = &backbuffer[y * ARDU_W];
+            volatile u16* dst = &vram[(y + oy) * GBA_WIDTH + ox];
+            dma_copy_row_16(src, dst, ARDU_W);
+            dirty_rows[y] = 0;
+        }
+    }
+
+    REG_DMA3CNT = 0;
+    full_redraw_needed = false;
 }
 
 void gfx_draw_pixel(int x, int y, u16 color) {
-    int px = x + ox;
-    int py = y + oy;
-
-    if (px < 0 || py < 0 || px >= WIDTH || py >= HEIGHT) return;
-    buffer[py * WIDTH + px] = color;
+    if (x < 0 || y < 0 || x >= ARDU_W || y >= ARDU_H) {
+        return;
+    }
+    backbuffer[y * ARDU_W + x] = mono_to_color(color);
+    dirty_rows[y] = 1;
 }
 
 void gfx_draw_fast_hline(int x, int y, int w, u16 color) {
     int i;
-    for (i = 0; i < w; i++) {
-        gfx_draw_pixel(x + i, y, color);
+    u16 mapped;
+
+    if (y < 0 || y >= ARDU_H || w <= 0) return;
+    if (x < 0) {
+        w += x;
+        x = 0;
     }
+    if (x + w > ARDU_W) {
+        w = ARDU_W - x;
+    }
+    if (w <= 0) return;
+
+    mapped = mono_to_color(color);
+    for (i = 0; i < w; i++) {
+        backbuffer[y * ARDU_W + x + i] = mapped;
+    }
+    dirty_rows[y] = 1;
 }
 
 void gfx_draw_fast_vline(int x, int y, int h, u16 color) {
     int i;
+    u16 mapped;
+
+    if (x < 0 || x >= ARDU_W || h <= 0) return;
+    if (y < 0) {
+        h += y;
+        y = 0;
+    }
+    if (y + h > ARDU_H) {
+        h = ARDU_H - y;
+    }
+    if (h <= 0) return;
+
+    mapped = mono_to_color(color);
     for (i = 0; i < h; i++) {
-        gfx_draw_pixel(x, y + i, color);
+        backbuffer[(y + i) * ARDU_W + x] = mapped;
+        dirty_rows[y + i] = 1;
     }
 }
 
 void gfx_draw_rect(int x, int y, int w, int h, u16 color) {
     if (w <= 0 || h <= 0) return;
-
     gfx_draw_fast_hline(x, y, w, color);
     gfx_draw_fast_hline(x, y + h - 1, w, color);
     gfx_draw_fast_vline(x, y, h, color);
@@ -218,8 +240,6 @@ void gfx_draw_rect(int x, int y, int w, int h, u16 color) {
 
 void gfx_fill_rect(int x, int y, int w, int h, u16 color) {
     int j;
-    if (w <= 0 || h <= 0) return;
-
     for (j = 0; j < h; j++) {
         gfx_draw_fast_hline(x, y + j, w, color);
     }
@@ -227,108 +247,125 @@ void gfx_fill_rect(int x, int y, int w, int h, u16 color) {
 
 void gfx_fill_screen(u16 color) {
     int i;
-    for (i = 0; i < WIDTH * HEIGHT; i++) {
-        buffer[i] = color;
+    u16 mapped = mono_to_color(color);
+    for (i = 0; i < ARDU_W * ARDU_H; i++) {
+        backbuffer[i] = mapped;
     }
+    memset(dirty_rows, 1, sizeof(dirty_rows));
+    full_redraw_needed = true;
 }
 
 void gfx_draw_bitmap(int x, int y, const unsigned char* bmp, int w, int h) {
-    draw_bitmap_core(x, y, bmp, w, h, 0);
-}
+    int sx, sy;
+    int pages;
 
-void gfx_draw_sprite_overwrite(int x, int y, const unsigned char* sprite, int frame) {
-    int w, h;
-    const unsigned char* data;
+    if (!bmp || w <= 0 || h <= 0) return;
 
-    if (!sprite) return;
+    pages = (h + 7) / 8;
 
-    w = sprite_width(sprite);
-    h = sprite_height(sprite);
-    data = sprite_frame_ptr(sprite, frame);
-
-    draw_bitmap_core(x, y, data, w, h, 0);
-}
-
-void gfx_draw_sprite_self_masked(int x, int y, const unsigned char* sprite, int frame) {
-    int w, h;
-    const unsigned char* data;
-
-    if (!sprite) return;
-
-    w = sprite_width(sprite);
-    h = sprite_height(sprite);
-    data = sprite_frame_ptr(sprite, frame);
-
-    draw_bitmap_core(x, y, data, w, h, 1);
-}
-
-void gfx_draw_sprite_erase(int x, int y, const unsigned char* sprite, int frame) {
-    int w, h, sx, sy;
-    const unsigned char* data;
-
-    if (!sprite) return;
-
-    w = sprite_width(sprite);
-    h = sprite_height(sprite);
-    data = sprite_frame_ptr(sprite, frame);
-
-    for (sy = 0; sy < h; sy++) {
-        for (sx = 0; sx < w; sx++) {
-            if (bitmap_get_bit(data, w, sx, sy)) {
-                gfx_draw_pixel(x + sx, y + sy, COLOR_BLACK);
-            }
-        }
-    }
-}
-
-void gfx_draw_sprite_plus_mask(int x, int y, const unsigned char* sprite, int frame) {
-    int w, h, pages, sx, sy;
-    const unsigned char* data;
-
-    if (!sprite) return;
-
-    w = sprite_width(sprite);
-    h = sprite_height(sprite);
-    pages = sprite_pages(h);
-    data = plus_mask_frame_ptr(sprite, frame);
-
-    for (sy = 0; sy < h; sy++) {
-        int page = sy >> 3;
-        int bit = sy & 7;
-
-        for (sx = 0; sx < w; sx++) {
-            int base = (page * w + sx) * 2;
-            int image_bit = (data[base] >> bit) & 1;
-            int mask_bit = (data[base + 1] >> bit) & 1;
-
-            if (mask_bit) {
-                gfx_draw_pixel(x + sx, y + sy, image_bit ? COLOR_WHITE : COLOR_BLACK);
-            }
+    for (sx = 0; sx < w; sx++) {
+        for (sy = 0; sy < h; sy++) {
+            int page = sy / 8;
+            int bit = sy & 7;
+            int idx = sx + page * w;
+            int pixel = (bmp[idx] >> bit) & 1;
+            gfx_draw_pixel(x + sx, y + sy, pixel ? 1 : 0);
         }
     }
 
     (void)pages;
 }
 
-void gfx_draw_sprite_external_mask(int x, int y, const unsigned char* sprite, const unsigned char* mask, int frame, int mask_frame) {
-    int w, h, sx, sy;
+void gfx_draw_sprite_overwrite(int x, int y, const unsigned char* sprite, int frame) {
+    int w, h, pages;
     const unsigned char* data;
+
+    if (!sprite) return;
+
+    w = sprite[0];
+    h = sprite[1];
+    pages = (h + 7) / 8;
+    data = sprite + 2 + frame * (w * pages);
+
+    gfx_draw_bitmap(x, y, data, w, h);
+}
+
+void gfx_draw_sprite_self_masked(int x, int y, const unsigned char* sprite, int frame) {
+    gfx_draw_sprite_overwrite(x, y, sprite, frame);
+}
+
+void gfx_draw_sprite_erase(int x, int y, const unsigned char* sprite, int frame) {
+    int w, h, sx, sy, pages;
+    const unsigned char* data;
+
+    if (!sprite) return;
+
+    w = sprite[0];
+    h = sprite[1];
+    pages = (h + 7) / 8;
+    data = sprite + 2 + frame * (w * pages);
+
+    for (sx = 0; sx < w; sx++) {
+        for (sy = 0; sy < h; sy++) {
+            int page = sy / 8;
+            int bit = sy & 7;
+            int idx = sx + page * w;
+            if ((data[idx] >> bit) & 1) {
+                gfx_draw_pixel(x + sx, y + sy, 0);
+            }
+        }
+    }
+}
+
+void gfx_draw_sprite_plus_mask(int x, int y, const unsigned char* sprite, int frame) {
+    int w, h, sx, sy, pages;
+    const unsigned char* data;
+
+    if (!sprite) return;
+
+    w = sprite[0];
+    h = sprite[1];
+    pages = (h + 7) / 8;
+    data = sprite + 2 + frame * (w * pages * 2);
+
+    for (sx = 0; sx < w; sx++) {
+        for (sy = 0; sy < h; sy++) {
+            int page = sy / 8;
+            int bit = sy & 7;
+            int idx = (sx + page * w) * 2;
+            int image_bit = (data[idx] >> bit) & 1;
+            int mask_bit = (data[idx + 1] >> bit) & 1;
+
+            if (mask_bit) {
+                gfx_draw_pixel(x + sx, y + sy, image_bit);
+            }
+        }
+    }
+}
+
+void gfx_draw_sprite_external_mask(int x, int y, const unsigned char* sprite, const unsigned char* mask, int frame, int mask_frame) {
+    int w, h, sx, sy, pages;
+    const unsigned char* image_data;
     const unsigned char* mask_data;
 
     if (!sprite || !mask) return;
 
-    w = sprite_width(sprite);
-    h = sprite_height(sprite);
-    data = sprite_frame_ptr(sprite, frame);
-    mask_data = sprite_frame_ptr(mask, mask_frame);
+    w = sprite[0];
+    h = sprite[1];
+    pages = (h + 7) / 8;
+    image_data = sprite + 2 + frame * (w * pages);
+    mask_data = mask + 2 + mask_frame * (w * pages);
 
-    for (sy = 0; sy < h; sy++) {
-        for (sx = 0; sx < w; sx++) {
-            int image_bit = bitmap_get_bit(data, w, sx, sy);
-            int mask_bit = bitmap_get_bit(mask_data, w, sx, sy);
+    for (sx = 0; sx < w; sx++) {
+        for (sy = 0; sy < h; sy++) {
+            int page = sy / 8;
+            int bit = sy & 7;
+            int idx = sx + page * w;
+            int image_bit = (image_data[idx] >> bit) & 1;
+            int mask_bit = (mask_data[idx] >> bit) & 1;
 
             if (mask_bit) {
-                gfx_draw_pixel(x + sx, y + sy, image_bit ? COLOR_WHITE : COLOR_BLACK);
+                gfx_draw_pixel(x + sx, y + sy, image_bit);
             }
         }
     }
@@ -339,50 +376,135 @@ void gfx_set_cursor(int x, int y) {
     cursor_y = y;
 }
 
-void gfx_write_char(char c) {
-    int glyph_index;
-    int col, row;
+void gfx_set_text_size(int size) {
+    if (size < 1) size = 1;
+    if (size > 4) size = 4;
+    text_size = size;
+}
 
-    if (c == '\n') {
+void gfx_set_text_wrap(bool w) {
+    text_wrap = w;
+}
+
+bool gfx_get_text_wrap(void) {
+    return text_wrap;
+}
+
+void gfx_set_text_raw(bool r) {
+    text_raw = r;
+}
+
+bool gfx_get_text_raw(void) {
+    return text_raw;
+}
+
+void gfx_set_text_color(int c) {
+    text_color = c ? 1 : 0;
+}
+
+void gfx_set_text_bg(int c) {
+    text_bg = c ? 1 : 0;
+}
+
+void gfx_set_invert(bool enable) {
+    (void)enable;
+}
+
+void gfx_write_char(char c) {
+    int glyph;
+    int col, row;
+    int cell_w = 6 * text_size;
+    int cell_h = 8 * text_size;
+
+    if (!text_raw) {
+        if (c == '\n') {
+            cursor_x = 0;
+            cursor_y += cell_h;
+            return;
+        }
+        if (c == '\r') {
+            return;
+        }
+    }
+
+    if (text_wrap && cursor_x + cell_w > ARDU_W) {
         cursor_x = 0;
-        cursor_y += 8;
-        return;
+        cursor_y += cell_h;
     }
 
     if ((unsigned char)c < 32 || (unsigned char)c > 127) {
-        c = 127;
+        glyph = 95;
+    } else {
+        glyph = (unsigned char)c - 32;
     }
 
-    glyph_index = ((unsigned char)c) - 32;
-
     for (col = 0; col < 5; col++) {
-        unsigned char bits = font5x7[glyph_index][col];
+        unsigned char bits = font5x7[glyph][col];
         for (row = 0; row < 7; row++) {
-            if (bits & (1 << row)) {
-                gfx_draw_pixel(cursor_x + col, cursor_y + row, COLOR_WHITE);
-            } else {
-                gfx_draw_pixel(cursor_x + col, cursor_y + row, COLOR_BLACK);
+            int px, py;
+            int on = (bits >> row) & 1;
+
+            for (py = 0; py < text_size; py++) {
+                for (px = 0; px < text_size; px++) {
+                    gfx_draw_pixel(
+                        cursor_x + col * text_size + px,
+                        cursor_y + row * text_size + py,
+                        on ? text_color : text_bg
+                    );
+                }
             }
         }
     }
 
-    /* 6th column spacing */
-    for (row = 0; row < 8; row++) {
-        gfx_draw_pixel(cursor_x + 5, cursor_y + row, COLOR_BLACK);
+    for (row = 0; row < cell_h; row++) {
+        int py = cursor_y + row;
+        int px;
+        if (py < 0 || py >= ARDU_H) continue;
+        for (px = 0; px < text_size; px++) {
+            int x = cursor_x + 5 * text_size + px;
+            if (x >= 0 && x < ARDU_W) {
+                backbuffer[py * ARDU_W + x] = mono_to_color(text_bg);
+                mark_row_dirty(py);
+            }
+        }
     }
 
-    /* 8th row blank baseline */
-    for (col = 0; col < 6; col++) {
-        gfx_draw_pixel(cursor_x + col, cursor_y + 7, COLOR_BLACK);
+    for (col = 0; col < cell_w; col++) {
+        int x = cursor_x + col;
+        int py;
+        if (x < 0 || x >= ARDU_W) continue;
+        for (py = 0; py < text_size; py++) {
+            int y = cursor_y + 7 * text_size + py;
+            if (y >= 0 && y < ARDU_H) {
+                backbuffer[y * ARDU_W + x] = mono_to_color(text_bg);
+                mark_row_dirty(y);
+            }
+        }
     }
 
-    cursor_x += 6;
+    cursor_x += cell_w;
 }
 
-void gfx_print(const char* str) {
-    if (!str) return;
-
-    while (*str) {
-        gfx_write_char(*str++);
+void gfx_write_string(const char* s) {
+    if (!s) return;
+    while (*s) {
+        gfx_write_char(*s++);
     }
+}
+
+void gfx_write_int(int v) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", v);
+    gfx_write_string(buf);
+}
+
+u32 gfx_get_last_present_ticks(void) {
+    return 0;
+}
+
+u32 gfx_get_max_present_ticks(void) {
+    return 0;
+}
+
+void gfx_reset_perf_counters(void) {
 }

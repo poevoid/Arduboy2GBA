@@ -2,8 +2,10 @@
 #define INPUT_H
 
 #include <gba_types.h>
+#include <stdbool.h>
 
-u16 input_poll();
-int input_pressed(u16 key);
+void input_poll(void);
+bool input_pressed(u16 key);
+bool input_just_pressed(u16 key);
 
 #endif

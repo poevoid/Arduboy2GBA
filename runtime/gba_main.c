@@ -1,15 +1,24 @@
+#include <gba_systemcalls.h>
+#include <gba_interrupt.h>
 #include "arduboy_compat.h"
-#include "audio.h"
 
-extern void setup();
-extern void loop();
+#ifndef TIME_SCALE
+#define TIME_SCALE 1.0f
+#endif
 
-int main() {
-    ab_init();
+extern void setup(void);
+extern void loop(void);
+
+int main(void) {
+    irqInit();
+    irqEnable(IRQ_VBLANK);
+
+    ab_begin();
+    ab_setTimeScale((float)TIME_SCALE);
+
     setup();
 
-    while(1) {
-        audio_update();
+    while (1) {
         loop();
     }
 }

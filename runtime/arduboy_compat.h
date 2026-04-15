@@ -3,45 +3,85 @@
 
 #include <gba_types.h>
 #include <gba_input.h>
+#include <stdbool.h>
 
-#define BLACK 0x0000
+#define WIDTH 128
+#define HEIGHT 64
+
 #define WHITE 0x7FFF
+#define BLACK 0x0000
 
+#ifndef PI
+#define PI 3.14159265358979323846
+#endif
+
+#ifndef F
+#define F(x) (x)
+#endif
+
+#define A_BUTTON     KEY_A
+#define B_BUTTON     KEY_B
 #define UP_BUTTON    KEY_UP
 #define DOWN_BUTTON  KEY_DOWN
 #define LEFT_BUTTON  KEY_LEFT
 #define RIGHT_BUTTON KEY_RIGHT
-#define A_BUTTON     KEY_A
-#define B_BUTTON     KEY_B
 
-void ab_init();
-void ab_clear();
-void ab_display();
+#define AB_CHAR_WIDTH 5
+#define AB_CHAR_HEIGHT 7
+#define AB_CHAR_SPACING 1
+#define AB_LINE_SPACING 1
 
-void ab_drawPixel(int x, int y, u16 color);
-void ab_drawFastHLine(int x, int y, int w, u16 color);
-void ab_drawFastVLine(int x, int y, int h, u16 color);
+#define AB_PRINT(x) ab_print(x)
 
-void ab_drawRect(int x, int y, int w, int h, u16 color);
-void ab_fillRect(int x, int y, int w, int h, u16 color);
-void ab_fillScreen(u16 color);
+void ab_begin(void);
+void ab_beginNoLogo(void);
+void ab_initRandomSeed(void);
 
-void ab_drawBitmap(int x, int y, const unsigned char* bmp, int w, int h);
+void ab_clear(void);
+void ab_display(void);
 
-void ab_drawOverwrite(int x, int y, const unsigned char* sprite, int frame);
-void ab_drawSelfMasked(int x, int y, const unsigned char* sprite, int frame);
-void ab_drawErase(int x, int y, const unsigned char* sprite, int frame);
-void ab_drawPlusMask(int x, int y, const unsigned char* sprite, int frame);
-void ab_drawExternalMask(int x, int y, const unsigned char* sprite, const unsigned char* mask, int frame, int mask_frame);
+void ab_drawPixel(int x, int y, int c);
+void ab_drawFastHLine(int x, int y, int w, int c);
+void ab_drawFastVLine(int x, int y, int h, int c);
+void ab_drawRect(int x, int y, int w, int h, int c);
+void ab_fillRect(int x, int y, int w, int h, int c);
 
 void ab_setCursor(int x, int y);
-void ab_print(const char* str);
+void ab_setTextSize(int s);
+void ab_setTextWrap(bool w);
+bool ab_getTextWrap(void);
+void ab_setTextRawMode(bool r);
+bool ab_getTextRawMode(void);
+void ab_setTextColor(int c);
+void ab_setTextBackground(int c);
 
-u16 ab_pollButtons();
-int ab_pressed(u16 key);
+void ab_print(const char* s);
+void ab_print(int v);
+void ab_print(char c);
+void ab_print(float v);
 
+void ab_pollButtons(void);
+bool ab_pressed(u16 key);
+bool ab_justPressed(u16 key);
+
+void ab_setFrameRate(int fps);
+bool ab_nextFrame(void);
+void ab_delay(int ms);
+void ab_idle(void);
+
+int ab_random(int min, int max);
 void ab_tone(int freq, int duration);
 void ab_playScore(const unsigned char* score);
-void ab_stopScore();
+void ab_stopScore(void);
+
+/* Time scaling */
+void ab_setTimeScale(float scale);
+float ab_getTimeScale(void);
+
+/* Debug/telemetry helpers */
+int ab_get_frame_duration_ms(void);
+int ab_get_dropped_frames(void);
+int ab_get_last_present_ticks(void);
+int ab_get_max_present_ticks(void);
 
 #endif

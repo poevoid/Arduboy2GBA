@@ -1,16 +1,20 @@
-#include "input.h"
 #include <gba_input.h>
+#include "input.h"
 
-static u16 keys;
+#define AB_KEY_MASK 0x03FF
 
-/* GBA has 10 main button bits in REG_KEYINPUT */
-#define AB_GBA_KEY_MASK 0x03FF
+static u16 curr = 0;
+static u16 prev = 0;
 
-u16 input_poll() {
-    keys = (~REG_KEYINPUT) & AB_GBA_KEY_MASK;
-    return keys;
+void input_poll(void) {
+    prev = curr;
+    curr = (u16)(~REG_KEYINPUT) & AB_KEY_MASK;
 }
 
-int input_pressed(u16 key) {
-    return (keys & key) != 0;
+bool input_pressed(u16 key) {
+    return (curr & key) != 0;
+}
+
+bool input_just_pressed(u16 key) {
+    return ((curr & key) != 0) && ((prev & key) == 0);
 }

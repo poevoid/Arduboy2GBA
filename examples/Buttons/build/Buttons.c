@@ -1,0 +1,112 @@
+#include "arduboy_compat.h"
+
+#include <math.h>
+#include <string.h>
+
+void setup();
+void loop();
+
+
+/*
+Buttons example
+June 11, 2015
+Copyright (C) 2015 David Martinez
+All rights reserved.
+This code is the most basic barebones code for showing how to use buttons in
+Arduboy.
+
+This library is free software; you can redistribute it and/or
+modify it under the terms of the GNU Lesser General Public
+License as published by the Free Software Foundation; either
+version 2.1 of the License, or (at your option) any later version.
+*/
+
+// Make an instance of arduboy used for many functions
+
+// Variables for your game go here.
+char title[] = "Press Buttons!";
+unsigned char x;
+unsigned char y;
+
+// Width of each character including inter-character space
+#define CHAR_WIDTH 6
+
+// Height of each character
+#define CHAR_HEIGHT 8
+
+// To get the number of characters, we subtract 1 from the length of
+// the array because there will be a NULL terminator at the end.
+#define NUM_CHARS (sizeof(title) - 1)
+
+// This is the highest value that x can be without the end of the text
+// going farther than the right side of the screen. We add one because
+// there will be a 1 pixel space at the end of the last character.
+// WIDTH and HEIGHT are defined in the Arduboy library.
+#define X_MAX (WIDTH - (NUM_CHARS * CHAR_WIDTH) + 1)
+
+// This is the highest value that y can be without the text going below
+// the bottom of the screen.
+#define Y_MAX (HEIGHT - CHAR_HEIGHT)
+
+
+// This function runs once in your game.
+// use it for anything that needs to be set only once in your game.
+void setup() {
+  //initiate arduboy instance
+  ab_begin();
+
+  // here we set the frame rate to 30, we do not need to run at default 60 and
+  // it saves us battery life.
+  ab_setFrameRate(30);
+
+  // set x and y to the middle of the screen
+  x = (WIDTH / 2) - (NUM_CHARS * CHAR_WIDTH / 2);
+  y = (HEIGHT / 2) - (CHAR_HEIGHT / 2);
+}
+
+
+// our main game loop, this runs once every cycle/frame.
+// this is where our game logic goes.
+void loop() {
+  // pause render until it's time for the next frame
+  if (!(ab_nextFrame()))
+    return;
+
+  // the next couple of lines will deal with checking if the D-pad buttons
+  // are pressed and move our text accordingly.
+  // We check to make sure that x and y stay within a range that keeps the
+  // text on the screen.
+
+  // if the right button is pressed move 1 pixel to the right every frame
+  if(ab_pressed(RIGHT_BUTTON) && (x < X_MAX)) {
+    x++;
+  }
+
+  // if the left button is pressed move 1 pixel to the left every frame
+  if(ab_pressed(LEFT_BUTTON) && (x > 0)) {
+    x--;
+  }
+
+  // if the up button or B button is pressed move 1 pixel up every frame
+  if((ab_pressed(UP_BUTTON) || ab_pressed(B_BUTTON)) && (y > 0)) {
+    y--;
+  }
+
+  // if the down button or A button is pressed move 1 pixel down every frame
+  if((ab_pressed(DOWN_BUTTON) || ab_pressed(A_BUTTON)) && (y < Y_MAX)) {
+    y++;
+  }
+
+
+  // we clear our screen to black
+  ab_clear();
+
+  // we set our cursor x pixels to the right and y down from the top
+  ab_setCursor(x, y);
+
+  // then we print to screen what is stored in our title variable we declared earlier
+  ab_print(title);
+
+  // then we finally we tell the arduboy to display what we just wrote to the display.
+  ab_display();
+}

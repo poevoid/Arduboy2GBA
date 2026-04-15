@@ -12,6 +12,8 @@ static int g_frame_duration_vblanks = 1;
 static int g_frame_counter = 0;
 static float g_time_scale = 1.0f;
 
+Arduboy2Base arduboy;
+
 void ab_setTimeScale(float scale) {
     if (scale <= 0.0f) {
         scale = 1.0f;
@@ -48,6 +50,10 @@ void ab_display(void) {
     gfx_present();
 }
 
+void ab_invert(bool enable) {
+    gfx_set_invert(enable);
+}
+
 void ab_drawPixel(int x, int y, int c) {
     gfx_draw_pixel(x, y, c);
 }
@@ -66,6 +72,35 @@ void ab_drawRect(int x, int y, int w, int h, int c) {
 
 void ab_fillRect(int x, int y, int w, int h, int c) {
     gfx_fill_rect(x, y, w, h, c);
+}
+
+void ab_fillScreen(int c) {
+    gfx_fill_screen(c);
+}
+
+void ab_drawBitmap(int x, int y, const unsigned char* bmp, int w, int h, int c) {
+    (void)c;
+    gfx_draw_bitmap(x, y, bmp, w, h);
+}
+
+void ab_drawOverwrite(int x, int y, const unsigned char* sprite, int frame) {
+    gfx_draw_sprite_overwrite(x, y, sprite, frame);
+}
+
+void ab_drawSelfMasked(int x, int y, const unsigned char* sprite, int frame) {
+    gfx_draw_sprite_self_masked(x, y, sprite, frame);
+}
+
+void ab_drawErase(int x, int y, const unsigned char* sprite, int frame) {
+    gfx_draw_sprite_erase(x, y, sprite, frame);
+}
+
+void ab_drawPlusMask(int x, int y, const unsigned char* sprite, int frame) {
+    gfx_draw_sprite_plus_mask(x, y, sprite, frame);
+}
+
+void ab_drawExternalMask(int x, int y, const unsigned char* sprite, const unsigned char* mask, int frame, int mask_frame) {
+    gfx_draw_sprite_external_mask(x, y, sprite, mask, frame, mask_frame);
 }
 
 void ab_setCursor(int x, int y) {
@@ -120,6 +155,30 @@ void ab_print(float v) {
     gfx_write_string(buf);
 }
 
+void ab_println(void) {
+    gfx_write_char('\n');
+}
+
+void ab_println(const char* s) {
+    ab_print(s);
+    ab_println();
+}
+
+void ab_println(int v) {
+    ab_print(v);
+    ab_println();
+}
+
+void ab_println(char c) {
+    ab_print(c);
+    ab_println();
+}
+
+void ab_println(float v) {
+    ab_print(v);
+    ab_println();
+}
+
 void ab_pollButtons(void) {
     input_poll();
 }
@@ -166,13 +225,11 @@ bool ab_nextFrame(void) {
     if (g_frame_counter >= g_frame_duration_vblanks) {
         g_frame_counter = 0;
         VBlankIntrWait();
-        input_poll();
         audio_update();
         return true;
     }
 
     VBlankIntrWait();
-    input_poll();
     audio_update();
     return false;
 }
@@ -198,14 +255,12 @@ void ab_delay(int ms) {
 
     for (i = 0; i < frames; i++) {
         VBlankIntrWait();
-        input_poll();
         audio_update();
     }
 }
 
 void ab_idle(void) {
     VBlankIntrWait();
-    input_poll();
     audio_update();
 }
 
@@ -220,12 +275,20 @@ void ab_tone(int freq, int duration) {
     audio_tone(freq, duration);
 }
 
+void ab_noTone(void) {
+    audio_stop_tone();
+}
+
 void ab_playScore(const unsigned char* score) {
     audio_play_score(score);
 }
 
 void ab_stopScore(void) {
     audio_stop_score();
+}
+
+bool ab_audio_enabled(void) {
+    return true;
 }
 
 int ab_get_frame_duration_ms(void) {

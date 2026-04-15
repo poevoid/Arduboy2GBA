@@ -18,9 +18,15 @@ def main():
         help="Global timing scale. 1.0 = normal, 0.5 = 2x faster, 2.0 = slower",
     )
     ap.add_argument(
+        "--out",
+        default=None,
+        help="Directory for generated .c, .elf, and .gba outputs. Defaults to the input file's folder.",
+    )
+    ap.add_argument(
         "--output-dir",
-        default=".",
-        help="Directory for generated .c, .elf, and .gba outputs",
+        dest="out_compat",
+        default=None,
+        help="Deprecated alias for --out.",
     )
     args = ap.parse_args()
 
@@ -35,7 +41,12 @@ def main():
     if time_scale <= 0.0:
         time_scale = 1.0
 
-    output_dir = os.path.abspath(os.path.join(project_root, args.output_dir))
+    output_dir_arg = args.out if args.out is not None else args.out_compat
+    if output_dir_arg is None:
+        output_dir = os.path.dirname(input_file)
+    else:
+        output_dir = os.path.abspath(output_dir_arg)
+
     os.makedirs(output_dir, exist_ok=True)
 
     build_dir = os.path.join(output_dir, "build")

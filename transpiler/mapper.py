@@ -1,7 +1,7 @@
 import re
 
 HEADER = """
-#include "../runtime/arduboy_compat.h"
+#include "arduboy_compat.h"
 """
 
 DIRECT_MAPPINGS = {
@@ -13,14 +13,18 @@ DIRECT_MAPPINGS = {
     "arduboy.display": "ab_display",
     "arduboy.pollButtons": "ab_pollButtons",
     "arduboy.pressed": "ab_pressed",
+    "arduboy.justPressed": "ab_justPressed",
     "arduboy.setCursor": "ab_setCursor",
     "arduboy.setTextSize": "ab_setTextSize",
+    "arduboy.setTextWrap": "ab_setTextWrap",
     "arduboy.invert": "ab_invert",
     "arduboy.beginNoLogo": "ab_beginNoLogo",
     "arduboy.begin": "ab_begin",
     "arduboy.setFrameRate": "ab_setFrameRate",
     "arduboy.initRandomSeed": "ab_initRandomSeed",
     "arduboy.nextFrame": "ab_nextFrame",
+    "arduboy.print": "ab_print",
+    "arduboy.println": "ab_println",
 
     # Arduboy classic
     "arduboy.setPixel": "ab_drawPixel",
@@ -69,6 +73,7 @@ INCLUDE_PATTERNS = [
 
 DECLARATION_PATTERNS = [
     r'^\s*Arduboy2\s+\w+\s*;\s*$',
+    r'^\s*Arduboy2Base\s+\w+\s*;\s*$',
     r'^\s*Arduboy\s+\w+\s*;\s*$',
     r'^\s*ArduboyPlaytune\s+\w+\s*;\s*$',
     r'^\s*ArduboyPlayTunes\s+\w+\s*;\s*$',
@@ -79,32 +84,27 @@ DECLARATION_PATTERNS = [
 
 def strip_arduino_specific_lines(code):
     for pattern in INCLUDE_PATTERNS:
-        code = re.sub(pattern, '', code, flags=re.MULTILINE)
+        code = re.sub(pattern, "", code, flags=re.MULTILINE)
 
     for pattern in DECLARATION_PATTERNS:
-        code = re.sub(pattern, '', code, flags=re.MULTILINE)
+        code = re.sub(pattern, "", code, flags=re.MULTILINE)
 
     return code
 
 
 def normalize_arduino_types(code):
-    code = re.sub(r'\bboolean\b', 'bool', code)
-    code = re.sub(r'\bbyte\b', 'unsigned char', code)
+    code = re.sub(r"\bboolean\b", "bool", code)
+    code = re.sub(r"\bbyte\b", "unsigned char", code)
 
-    code = re.sub(r'\bconst\s+String\b', 'const char*', code)
-    code = re.sub(r'\bString\b', 'char*', code)
+    code = re.sub(r"\bconst\s+String\b", "const char*", code)
+    code = re.sub(r"\bString\b", "char*", code)
 
     return code
 
 
 def normalize_arduino_helpers(code):
-    code = re.sub(r'\brandom\s*\(', 'ab_random(', code)
-    code = re.sub(r'\bdelay\s*\(', 'ab_delay(', code)
-    return code
-
-
-def normalize_print_calls(code):
-    code = re.sub(r'\barduboy\.print\s*\(', 'AB_PRINT(', code)
+    code = re.sub(r"\brandom\s*\(", "ab_random(", code)
+    code = re.sub(r"\bdelay\s*\(", "ab_delay(", code)
     return code
 
 
@@ -153,6 +153,7 @@ def build_prelude(prototypes):
         HEADER.strip(),
         "",
         "#include <math.h>",
+        "#include <string.h>",
         "",
     ]
 
@@ -168,7 +169,6 @@ def map_code(parsed):
     code = strip_arduino_specific_lines(code)
     code = normalize_arduino_types(code)
     code = normalize_arduino_helpers(code)
-    code = normalize_print_calls(code)
     code = normalize_structure(code)
     code = apply_direct_mappings(code)
 

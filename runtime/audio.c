@@ -8,6 +8,7 @@
 
     Current support:
     - audio_tone(freq, duration): square wave on channel 1
+    - duration == 0 means play continuously until stopped
     - audio_update(): decrements a frame timer and stops tone automatically
     - audio_play_score(): stub for now
 */
@@ -83,7 +84,7 @@ void audio_tone(int freq, int duration) {
     int reg_freq;
     int frames;
 
-    if (freq <= 0 || duration <= 0) {
+    if (freq <= 0) {
         audio_stop_tone();
         return;
     }
@@ -117,6 +118,16 @@ void audio_tone(int freq, int duration) {
     */
     REG_SOUND1CNT_X = (u16)(0x8000 | (reg_freq & 0x07FF));
 
+    if (duration == 0) {
+        g_tone_frames_remaining = -1;
+        g_tone_active = 1;
+        return;
+    }
+
+    if (duration < 0) {
+        duration = 0;
+    }
+
     frames = (duration + 16) / 17;
     if (frames < 1) {
         frames = 1;
@@ -128,6 +139,10 @@ void audio_tone(int freq, int duration) {
 
 void audio_update(void) {
     if (!g_tone_active) {
+        return;
+    }
+
+    if (g_tone_frames_remaining < 0) {
         return;
     }
 

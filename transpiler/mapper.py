@@ -71,13 +71,12 @@ INCLUDE_PATTERNS = [
     r'^\s*#include\s*[<"]Sprites\.h[>"]\s*$',
 ]
 
+# Only strip declarations that are replaced by runtime globals/shims.
+# Do NOT strip ArduboyPlaytune declarations from the sketch.
 DECLARATION_PATTERNS = [
     r'^\s*Arduboy2\s+\w+\s*;\s*$',
     r'^\s*Arduboy2Base\s+\w+\s*;\s*$',
     r'^\s*Arduboy\s+\w+\s*;\s*$',
-    r'^\s*ArduboyPlaytune\s+\w+\s*;\s*$',
-    r'^\s*ArduboyPlayTunes\s+\w+\s*;\s*$',
-    r'^\s*Playtune\s+\w+\s*;\s*$',
     r'^\s*Sprites\s+\w+\s*;\s*$',
 ]
 
@@ -125,25 +124,61 @@ def apply_direct_mappings(code):
 
 
 def generate_prototypes(code):
-    pattern = re.compile(
-        r'^\s*([A-Za-z_][\w\s\*\&]*?)\s+([A-Za-z_]\w*)\s*\((.*?)\)\s*\{',
-        re.MULTILINE | re.DOTALL
-    )
+    """
+    Generate forward declarations for actual function definitions only.
 
-    keywords = {"if", "for", "while", "switch"}
+    Important: avoid matching object declarations like:
+        ArduboyPlaytune tunes(arduboy.audio.enabled);
+
+    The previous regex used DOTALL and could accidentally consume from such a
+    declaration down to the next function body, which injected bogus prototypes
+    at the top of the generated file.
+    """
     prototypes = []
+    seen = set()
+    keywords = {"if", "for", "while", "switch", "return"}
 
-    for m in pattern.finditer(code):
+    lines = code.splitlines()
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+
+        # Look for lines that begin like a function signature.
+        # Keep this single-line and conservative so we don't eat declarations.
+        m = re.match(
+            r'^\s*([A-Za-z_][\w\s\*\&\:<>~]*?)\s+([A-Za-z_]\w*)\s*\(([^;{}]*)\)\s*$',
+            line
+        )
+
+        if not m:
+            i += 1
+            continue
+
         ret_type = m.group(1).strip()
         name = m.group(2).strip()
         args = m.group(3).strip()
 
         if name in keywords:
+            i += 1
+            continue
+
+        # Require the next non-empty line to be "{" so we only match real
+        # function definitions in the sketch, not declarations or object construction.
+        j = i + 1
+        while j < len(lines) and lines[j].strip() == "":
+            j += 1
+
+        if j >= len(lines) or lines[j].strip() != "{":
+            i += 1
             continue
 
         prototype = f"{ret_type} {name}({args});"
-        if prototype not in prototypes:
+        if prototype not in seen:
+            seen.add(prototype)
             prototypes.append(prototype)
+
+        i = j + 1
 
     return prototypes
 

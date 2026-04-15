@@ -38,6 +38,9 @@
 #define LEFT_BUTTON  KEY_LEFT
 #define RIGHT_BUTTON KEY_RIGHT
 
+#define PIN_SPEAKER_1 1
+#define PIN_SPEAKER_2 2
+
 #define AB_CHAR_WIDTH 5
 #define AB_CHAR_HEIGHT 7
 #define AB_CHAR_SPACING 1
@@ -104,6 +107,9 @@ void ab_playScore(const unsigned char* score);
 void ab_stopScore(void);
 
 bool ab_audio_enabled(void);
+void ab_audio_on(void);
+void ab_audio_off(void);
+bool ab_score_playing(void);
 
 /* Time scaling */
 void ab_setTimeScale(float scale);
@@ -115,10 +121,39 @@ int ab_get_dropped_frames(void);
 int ab_get_last_present_ticks(void);
 int ab_get_max_present_ticks(void);
 
+class ArduboyAudioShim;
+
+class ArduboyAudioEnabledProxy {
+public:
+    ArduboyAudioShim* owner;
+
+    ArduboyAudioEnabledProxy() : owner(0) {}
+    explicit ArduboyAudioEnabledProxy(ArduboyAudioShim* o) : owner(o) {}
+
+    bool operator()() const;
+    operator bool() const;
+};
+
 class ArduboyAudioShim {
 public:
-    bool enabled() const { return ab_audio_enabled(); }
+    ArduboyAudioEnabledProxy enabled;
+
+    ArduboyAudioShim() : enabled(this) {}
+
+    void on() { ab_audio_on(); }
+    void off() { ab_audio_off(); }
+    bool isEnabled() const { return ab_audio_enabled(); }
 };
+
+inline bool ArduboyAudioEnabledProxy::operator()() const {
+    (void)owner;
+    return ab_audio_enabled();
+}
+
+inline ArduboyAudioEnabledProxy::operator bool() const {
+    (void)owner;
+    return ab_audio_enabled();
+}
 
 class Arduboy2Base {
 public:
@@ -208,6 +243,40 @@ public:
 };
 
 class BeepPin2 : public BeepPin1 {
+};
+
+class ArduboyPlaytune {
+public:
+    bool (*audio_enabled_cb)(void);
+
+    ArduboyPlaytune() : audio_enabled_cb(0) {}
+
+    template <typename T>
+    explicit ArduboyPlaytune(T) : audio_enabled_cb(0) {}
+
+    void initChannel(unsigned char) {}
+
+    void playScore(const unsigned char* score) {
+        if (ab_audio_enabled()) {
+            ab_playScore(score);
+        }
+    }
+
+    void stopScore() {
+        ab_stopScore();
+    }
+
+    bool playing() const {
+        return ab_score_playing();
+    }
+};
+
+class ArduboyPlayTunes : public ArduboyPlaytune {
+public:
+    ArduboyPlayTunes() : ArduboyPlaytune() {}
+
+    template <typename T>
+    explicit ArduboyPlayTunes(T t) : ArduboyPlaytune(t) {}
 };
 
 #endif

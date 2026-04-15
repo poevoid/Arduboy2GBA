@@ -11,6 +11,7 @@ static int g_frame_rate = 60;
 static int g_frame_duration_vblanks = 1;
 static int g_frame_counter = 0;
 static float g_time_scale = 1.0f;
+static bool g_audio_enabled = true;
 
 Arduboy2Base arduboy;
 
@@ -32,6 +33,7 @@ void ab_begin(void) {
     g_frame_rate = 60;
     g_frame_duration_vblanks = 1;
     g_frame_counter = 0;
+    g_audio_enabled = true;
 }
 
 void ab_beginNoLogo(void) {
@@ -272,6 +274,9 @@ int ab_random(int min, int max) {
 }
 
 void ab_tone(int freq, int duration) {
+    if (!g_audio_enabled) {
+        return;
+    }
     audio_tone(freq, duration);
 }
 
@@ -280,6 +285,9 @@ void ab_noTone(void) {
 }
 
 void ab_playScore(const unsigned char* score) {
+    if (!g_audio_enabled) {
+        return;
+    }
     audio_play_score(score);
 }
 
@@ -288,7 +296,21 @@ void ab_stopScore(void) {
 }
 
 bool ab_audio_enabled(void) {
-    return true;
+    return g_audio_enabled;
+}
+
+void ab_audio_on(void) {
+    g_audio_enabled = true;
+}
+
+void ab_audio_off(void) {
+    g_audio_enabled = false;
+    audio_stop_tone();
+    audio_stop_score();
+}
+
+bool ab_score_playing(void) {
+    return audio_score_playing();
 }
 
 int ab_get_frame_duration_ms(void) {

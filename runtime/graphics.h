@@ -15,6 +15,8 @@ void gfx_draw_rect(int x, int y, int w, int h, u16 color);
 void gfx_fill_rect(int x, int y, int w, int h, u16 color);
 void gfx_fill_screen(u16 color);
 void gfx_draw_bitmap(int x, int y, const unsigned char* bmp, int w, int h);
+void gfx_draw_circle(int x0, int y0, int r, u16 color);
+void gfx_fill_circle(int x0, int y0, int r, u16 color);
 
 void gfx_draw_sprite_overwrite(int x, int y, const unsigned char* sprite, int frame);
 void gfx_draw_sprite_self_masked(int x, int y, const unsigned char* sprite, int frame);
@@ -31,6 +33,8 @@ bool gfx_get_text_raw(void);
 void gfx_set_text_color(int c);
 void gfx_set_text_bg(int c);
 void gfx_set_invert(bool enable);
+
+void gfx_set_rgb_led(u8 r, u8 g, u8 b);
 
 void gfx_write_char(char c);
 void gfx_write_string(const char* s);

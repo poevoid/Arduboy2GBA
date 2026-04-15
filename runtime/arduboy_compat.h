@@ -41,6 +41,16 @@
 #define PIN_SPEAKER_1 1
 #define PIN_SPEAKER_2 2
 
+#define RED_LED   1
+#define GREEN_LED 2
+#define BLUE_LED  4
+
+#define RGB_ON  1
+#define RGB_OFF 0
+
+#define CLEAR_BUFFER 1
+#define HEX 16
+
 #define AB_CHAR_WIDTH 5
 #define AB_CHAR_HEIGHT 7
 #define AB_CHAR_SPACING 1
@@ -55,6 +65,7 @@ void ab_initRandomSeed(void);
 
 void ab_clear(void);
 void ab_display(void);
+void ab_display(int clear_buffer);
 void ab_invert(bool enable);
 
 void ab_drawPixel(int x, int y, int c = WHITE);
@@ -63,6 +74,8 @@ void ab_drawFastVLine(int x, int y, int h, int c = WHITE);
 void ab_drawRect(int x, int y, int w, int h, int c = WHITE);
 void ab_fillRect(int x, int y, int w, int h, int c = WHITE);
 void ab_fillScreen(int c = BLACK);
+void ab_drawCircle(int x, int y, int r, int c = WHITE);
+void ab_fillCircle(int x, int y, int r, int c = WHITE);
 void ab_drawBitmap(int x, int y, const unsigned char* bmp, int w, int h, int c = WHITE);
 
 void ab_drawOverwrite(int x, int y, const unsigned char* sprite, int frame = 0);
@@ -82,8 +95,12 @@ void ab_setTextBackground(int c);
 
 void ab_print(const char* s);
 void ab_print(int v);
+void ab_print(unsigned int v);
 void ab_print(char c);
 void ab_print(float v);
+void ab_print(int v, int base);
+void ab_print(unsigned int v, int base);
+void ab_print(unsigned char v, int base);
 
 void ab_println(void);
 void ab_println(const char* s);
@@ -110,6 +127,13 @@ bool ab_audio_enabled(void);
 void ab_audio_on(void);
 void ab_audio_off(void);
 bool ab_score_playing(void);
+void ab_set_tone_mutes_score(bool mute);
+
+void ab_setRGBled(u8 red, u8 green, u8 blue);
+void ab_setRGBled(u8 color, u8 value);
+void ab_digitalWriteRGB(u8 color, u8 value);
+void ab_digitalWriteRGB(u8 red, u8 green, u8 blue);
+void ab_freeRGBled(void);
 
 /* Time scaling */
 void ab_setTimeScale(float scale);
@@ -165,6 +189,7 @@ public:
 
     void clear() { ab_clear(); }
     void display() { ab_display(); }
+    void display(int clear_buffer) { ab_display(clear_buffer); }
     void invert(bool enable) { ab_invert(enable); }
 
     void drawPixel(int x, int y, int c = WHITE) { ab_drawPixel(x, y, c); }
@@ -173,6 +198,8 @@ public:
     void drawRect(int x, int y, int w, int h, int c = WHITE) { ab_drawRect(x, y, w, h, c); }
     void fillRect(int x, int y, int w, int h, int c = WHITE) { ab_fillRect(x, y, w, h, c); }
     void fillScreen(int c = BLACK) { ab_fillScreen(c); }
+    void drawCircle(int x, int y, int r, int c = WHITE) { ab_drawCircle(x, y, r, c); }
+    void fillCircle(int x, int y, int r, int c = WHITE) { ab_fillCircle(x, y, r, c); }
     void drawBitmap(int x, int y, const unsigned char* bmp, int w, int h, int c = WHITE) { ab_drawBitmap(x, y, bmp, w, h, c); }
     void drawSlowXYBitmap(int x, int y, const unsigned char* bmp, int w, int h, int c = WHITE) { ab_drawBitmap(x, y, bmp, w, h, c); }
 
@@ -184,8 +211,12 @@ public:
 
     void print(const char* s) { ab_print(s); }
     void print(int v) { ab_print(v); }
+    void print(unsigned int v) { ab_print(v); }
     void print(char c) { ab_print(c); }
     void print(float v) { ab_print(v); }
+    void print(int v, int base) { ab_print(v, base); }
+    void print(unsigned int v, int base) { ab_print(v, base); }
+    void print(unsigned char v, int base) { ab_print(v, base); }
 
     void println() { ab_println(); }
     void println(const char* s) { ab_println(s); }
@@ -201,6 +232,12 @@ public:
     bool nextFrame() { return ab_nextFrame(); }
 
     void delayShort(unsigned long ms) { ab_delay((int)ms); }
+
+    void setRGBled(u8 red, u8 green, u8 blue) { ab_setRGBled(red, green, blue); }
+    void setRGBled(u8 color, u8 value) { ab_setRGBled(color, value); }
+    void digitalWriteRGB(u8 color, u8 value) { ab_digitalWriteRGB(color, value); }
+    void digitalWriteRGB(u8 red, u8 green, u8 blue) { ab_digitalWriteRGB(red, green, blue); }
+    void freeRGBled() { ab_freeRGBled(); }
 };
 
 typedef Arduboy2Base Arduboy2;
@@ -268,6 +305,16 @@ public:
 
     bool playing() const {
         return ab_score_playing();
+    }
+
+    void tone(unsigned int frequency, unsigned long duration = 0) {
+        if (ab_audio_enabled()) {
+            ab_tone((int)frequency, (int)duration);
+        }
+    }
+
+    void toneMutesScore(bool mute) {
+        ab_set_tone_mutes_score(mute);
     }
 };
 

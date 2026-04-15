@@ -13,7 +13,40 @@ static int g_frame_counter = 0;
 static float g_time_scale = 1.0f;
 static bool g_audio_enabled = true;
 
+static u8 g_led_r = 0;
+static u8 g_led_g = 0;
+static u8 g_led_b = 0;
+
 Arduboy2Base arduboy;
+
+static void sync_led_state(void) {
+    gfx_set_rgb_led(g_led_r, g_led_g, g_led_b);
+}
+
+static void set_led_component(u8 color, u8 value) {
+    if (color & RED_LED) {
+        g_led_r = value;
+    }
+    if (color & GREEN_LED) {
+        g_led_g = value;
+    }
+    if (color & BLUE_LED) {
+        g_led_b = value;
+    }
+}
+
+static void print_unsigned_base(unsigned int v, int base) {
+    char buf[33];
+
+    if (base == HEX) {
+        snprintf(buf, sizeof(buf), "%X", v);
+        gfx_write_string(buf);
+        return;
+    }
+
+    snprintf(buf, sizeof(buf), "%u", v);
+    gfx_write_string(buf);
+}
 
 void ab_setTimeScale(float scale) {
     if (scale <= 0.0f) {
@@ -34,6 +67,11 @@ void ab_begin(void) {
     g_frame_duration_vblanks = 1;
     g_frame_counter = 0;
     g_audio_enabled = true;
+
+    g_led_r = 0;
+    g_led_g = 0;
+    g_led_b = 0;
+    sync_led_state();
 }
 
 void ab_beginNoLogo(void) {
@@ -50,6 +88,13 @@ void ab_clear(void) {
 
 void ab_display(void) {
     gfx_present();
+}
+
+void ab_display(int clear_buffer) {
+    gfx_present();
+    if (clear_buffer) {
+        gfx_clear();
+    }
 }
 
 void ab_invert(bool enable) {
@@ -78,6 +123,14 @@ void ab_fillRect(int x, int y, int w, int h, int c) {
 
 void ab_fillScreen(int c) {
     gfx_fill_screen(c);
+}
+
+void ab_drawCircle(int x, int y, int r, int c) {
+    gfx_draw_circle(x, y, r, c);
+}
+
+void ab_fillCircle(int x, int y, int r, int c) {
+    gfx_fill_circle(x, y, r, c);
 }
 
 void ab_drawBitmap(int x, int y, const unsigned char* bmp, int w, int h, int c) {
@@ -147,6 +200,12 @@ void ab_print(int v) {
     gfx_write_string(buf);
 }
 
+void ab_print(unsigned int v) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%u", v);
+    gfx_write_string(buf);
+}
+
 void ab_print(char c) {
     gfx_write_char(c);
 }
@@ -155,6 +214,22 @@ void ab_print(float v) {
     char buf[32];
     snprintf(buf, sizeof(buf), "%.2f", v);
     gfx_write_string(buf);
+}
+
+void ab_print(int v, int base) {
+    if (base == HEX) {
+        print_unsigned_base((unsigned int)v, base);
+    } else {
+        ab_print(v);
+    }
+}
+
+void ab_print(unsigned int v, int base) {
+    print_unsigned_base(v, base);
+}
+
+void ab_print(unsigned char v, int base) {
+    print_unsigned_base((unsigned int)v, base);
 }
 
 void ab_println(void) {
@@ -311,6 +386,37 @@ void ab_audio_off(void) {
 
 bool ab_score_playing(void) {
     return audio_score_playing();
+}
+
+void ab_set_tone_mutes_score(bool mute) {
+    audio_set_tone_mutes_score(mute);
+}
+
+void ab_setRGBled(u8 red, u8 green, u8 blue) {
+    g_led_r = red;
+    g_led_g = green;
+    g_led_b = blue;
+    sync_led_state();
+}
+
+void ab_setRGBled(u8 color, u8 value) {
+    set_led_component(color, value);
+    sync_led_state();
+}
+
+void ab_digitalWriteRGB(u8 color, u8 value) {
+    set_led_component(color, value ? 255 : 0);
+    sync_led_state();
+}
+
+void ab_digitalWriteRGB(u8 red, u8 green, u8 blue) {
+    g_led_r = red ? 255 : 0;
+    g_led_g = green ? 255 : 0;
+    g_led_b = blue ? 255 : 0;
+    sync_led_state();
+}
+
+void ab_freeRGBled(void) {
 }
 
 int ab_get_frame_duration_ms(void) {

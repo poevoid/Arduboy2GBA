@@ -23,8 +23,6 @@ DIRECT_MAPPINGS = {
     "arduboy.setFrameRate": "ab_setFrameRate",
     "arduboy.initRandomSeed": "ab_initRandomSeed",
     "arduboy.nextFrame": "ab_nextFrame",
-    "arduboy.print": "ab_print",
-    "arduboy.println": "ab_println",
 
     # Arduboy classic
     "arduboy.setPixel": "ab_drawPixel",
@@ -39,6 +37,8 @@ DIRECT_MAPPINGS = {
     "arduboy.drawRect": "ab_drawRect",
     "arduboy.fillRect": "ab_fillRect",
     "arduboy.fillScreen": "ab_fillScreen",
+    "arduboy.drawCircle": "ab_drawCircle",
+    "arduboy.fillCircle": "ab_fillCircle",
 
     # Sprites APIs
     "Sprites::drawOverwrite": "ab_drawOverwrite",
@@ -71,8 +71,6 @@ INCLUDE_PATTERNS = [
     r'^\s*#include\s*[<"]Sprites\.h[>"]\s*$',
 ]
 
-# Only strip declarations that are replaced by runtime globals/shims.
-# Do NOT strip ArduboyPlaytune declarations from the sketch.
 DECLARATION_PATTERNS = [
     r'^\s*Arduboy2\s+\w+\s*;\s*$',
     r'^\s*Arduboy2Base\s+\w+\s*;\s*$',
@@ -123,80 +121,116 @@ def apply_direct_mappings(code):
     return code
 
 
-def generate_prototypes(code):
+def find_function_definitions(code):
     """
-    Generate forward declarations for actual function definitions only.
+    Find actual function definitions only.
 
-    Important: avoid matching object declarations like:
-        ArduboyPlaytune tunes(arduboy.audio.enabled);
+    Supports both:
+      void foo()
+      {
+      }
 
-    The previous regex used DOTALL and could accidentally consume from such a
-    declaration down to the next function body, which injected bogus prototypes
-    at the top of the generated file.
+    and:
+      void foo() {
+      }
+
+    Avoids matching object declarations like:
+      ArduboyPlaytune tunes(arduboy.audio.enabled);
     """
-    prototypes = []
+    functions = []
     seen = set()
     keywords = {"if", "for", "while", "switch", "return"}
 
     lines = code.splitlines()
-    i = 0
+    offset = 0
 
+    multi_line_sig = re.compile(
+        r'^\s*([A-Za-z_~][\w\s\*\&\:<>]*?)\s+([A-Za-z_]\w*)\s*\(([^;{}]*)\)\s*$'
+    )
+    same_line_sig = re.compile(
+        r'^\s*([A-Za-z_~][\w\s\*\&\:<>]*?)\s+([A-Za-z_]\w*)\s*\(([^;{}]*)\)\s*\{\s*$'
+    )
+
+    i = 0
     while i < len(lines):
         line = lines[i]
+        line_start = offset
 
-        # Look for lines that begin like a function signature.
-        # Keep this single-line and conservative so we don't eat declarations.
-        m = re.match(
-            r'^\s*([A-Za-z_][\w\s\*\&\:<>~]*?)\s+([A-Za-z_]\w*)\s*\(([^;{}]*)\)\s*$',
-            line
-        )
+        m = same_line_sig.match(line)
+        if m:
+            ret_type = m.group(1).strip()
+            name = m.group(2).strip()
+            args = m.group(3).strip()
 
-        if not m:
+            if name not in keywords:
+                prototype = f"{ret_type} {name}({args});"
+                if prototype not in seen:
+                    seen.add(prototype)
+                    functions.append({
+                        "prototype": prototype,
+                        "line_index": i,
+                        "char_index": line_start,
+                    })
+
+            offset += len(line) + 1
             i += 1
             continue
 
-        ret_type = m.group(1).strip()
-        name = m.group(2).strip()
-        args = m.group(3).strip()
+        m = multi_line_sig.match(line)
+        if m:
+            ret_type = m.group(1).strip()
+            name = m.group(2).strip()
+            args = m.group(3).strip()
 
-        if name in keywords:
+            if name not in keywords:
+                j = i + 1
+                next_offset = offset + len(line) + 1
+
+                while j < len(lines) and lines[j].strip() == "":
+                    next_offset += len(lines[j]) + 1
+                    j += 1
+
+                if j < len(lines) and lines[j].strip() == "{":
+                    prototype = f"{ret_type} {name}({args});"
+                    if prototype not in seen:
+                        seen.add(prototype)
+                        functions.append({
+                            "prototype": prototype,
+                            "line_index": i,
+                            "char_index": line_start,
+                        })
+
+            offset += len(line) + 1
             i += 1
             continue
 
-        # Require the next non-empty line to be "{" so we only match real
-        # function definitions in the sketch, not declarations or object construction.
-        j = i + 1
-        while j < len(lines) and lines[j].strip() == "":
-            j += 1
+        offset += len(line) + 1
+        i += 1
 
-        if j >= len(lines) or lines[j].strip() != "{":
-            i += 1
-            continue
-
-        prototype = f"{ret_type} {name}({args});"
-        if prototype not in seen:
-            seen.add(prototype)
-            prototypes.append(prototype)
-
-        i = j + 1
-
-    return prototypes
+    return functions
 
 
-def build_prelude(prototypes):
-    lines = [
+def build_header_block():
+    return '\n'.join([
         HEADER.strip(),
         "",
         "#include <math.h>",
         "#include <string.h>",
         "",
-    ]
+    ])
 
-    if prototypes:
-        lines.extend(prototypes)
-        lines.append("")
 
-    return "\n".join(lines) + "\n"
+def insert_prototypes_before_first_function(code, prototypes):
+    if not prototypes:
+        return code
+
+    functions = find_function_definitions(code)
+    if not functions:
+        return code
+
+    insert_at = functions[0]["char_index"]
+    proto_block = "\n".join(prototypes) + "\n\n"
+    return code[:insert_at] + proto_block + code[insert_at:]
 
 
 def map_code(parsed):
@@ -207,7 +241,10 @@ def map_code(parsed):
     code = normalize_structure(code)
     code = apply_direct_mappings(code)
 
-    prototypes = generate_prototypes(code)
-    prelude = build_prelude(prototypes)
+    functions = find_function_definitions(code)
+    prototypes = [f["prototype"] for f in functions]
 
-    return prelude + "\n" + code
+    header_block = build_header_block()
+    code = insert_prototypes_before_first_function(code, prototypes)
+
+    return header_block + code

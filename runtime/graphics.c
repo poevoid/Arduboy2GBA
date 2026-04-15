@@ -12,6 +12,10 @@
 #define COLOR_BLACK 0x0000
 #define COLOR_WHITE 0x7FFF
 
+#define LED_INDICATOR_SIZE 16
+#define LED_INDICATOR_RADIUS 8
+#define LED_INDICATOR_SPACING 6
+
 static volatile u16* vram = (volatile u16*)0x6000000;
 static u16 backbuffer[ARDU_W * ARDU_H] __attribute__((section(".ewram"), aligned(4)));
 static unsigned char dirty_rows[ARDU_H] __attribute__((section(".ewram"), aligned(4)));
@@ -27,6 +31,11 @@ static bool text_raw = false;
 static int text_color = 1;
 static int text_bg = 0;
 static bool full_redraw_needed = true;
+static bool invert_enabled = false;
+
+static u8 led_r = 0;
+static u8 led_g = 0;
+static u8 led_b = 0;
 
 static const unsigned char font5x7[96][5] = {
     {0x00,0x00,0x00,0x00,0x00},
@@ -128,14 +137,18 @@ static const unsigned char font5x7[96][5] = {
 };
 
 static inline u16 mono_to_color(int c) {
-    return c ? COLOR_WHITE : COLOR_BLACK;
+    int on = c ? 1 : 0;
+    if (invert_enabled) {
+        on = !on;
+    }
+    return on ? COLOR_WHITE : COLOR_BLACK;
 }
 
-static inline void wait_for_vblank(void) {
-    while (REG_VCOUNT >= 160) {
-    }
-    while (REG_VCOUNT < 160) {
-    }
+static inline u16 rgb888_to_gba555(u8 r, u8 g, u8 b) {
+    u16 rr = (u16)(r >> 3);
+    u16 gg = (u16)(g >> 3);
+    u16 bb = (u16)(b >> 3);
+    return (u16)(rr | (gg << 5) | (bb << 10));
 }
 
 static inline void dma_copy_row_16(const u16* src, volatile u16* dst, int count) {
@@ -148,6 +161,52 @@ static inline void dma_copy_row_16(const u16* src, volatile u16* dst, int count)
 static inline void mark_row_dirty(int y) {
     if (y >= 0 && y < ARDU_H) {
         dirty_rows[y] = 1;
+    }
+}
+
+static void draw_led_indicator(void) {
+    int left = ox - LED_INDICATOR_SPACING - LED_INDICATOR_SIZE;
+    int top = oy + (ARDU_H - LED_INDICATOR_SIZE) / 2;
+    int cx = left + LED_INDICATOR_RADIUS;
+    int cy = top + LED_INDICATOR_RADIUS;
+    int y;
+
+    u16 fill = rgb888_to_gba555(led_r, led_g, led_b);
+    u16 border = COLOR_WHITE;
+
+    if (invert_enabled) {
+        fill ^= 0x7FFF;
+        border = COLOR_BLACK;
+    }
+
+    for (y = 0; y < LED_INDICATOR_SIZE; ++y) {
+        int x;
+        int py = top + y;
+
+        if (py < 0 || py >= GBA_HEIGHT) {
+            continue;
+        }
+
+        for (x = 0; x < LED_INDICATOR_SIZE; ++x) {
+            int px = left + x;
+            int dx;
+            int dy;
+            int dist2;
+
+            if (px < 0 || px >= GBA_WIDTH) {
+                continue;
+            }
+
+            dx = px - cx;
+            dy = py - cy;
+            dist2 = dx * dx + dy * dy;
+
+            if (dist2 <= (LED_INDICATOR_RADIUS - 1) * (LED_INDICATOR_RADIUS - 1)) {
+                vram[py * GBA_WIDTH + px] = fill;
+            } else if (dist2 <= LED_INDICATOR_RADIUS * LED_INDICATOR_RADIUS) {
+                vram[py * GBA_WIDTH + px] = border;
+            }
+        }
     }
 }
 
@@ -178,6 +237,8 @@ void gfx_present(void) {
 
     REG_DMA3CNT = 0;
     full_redraw_needed = false;
+
+    draw_led_indicator();
 }
 
 void gfx_draw_pixel(int x, int y, u16 color) {
@@ -274,6 +335,48 @@ void gfx_draw_bitmap(int x, int y, const unsigned char* bmp, int w, int h) {
     }
 
     (void)pages;
+}
+
+void gfx_draw_circle(int x0, int y0, int r, u16 color) {
+    int x = r;
+    int y = 0;
+    int err = 1 - x;
+
+    while (x >= y) {
+        gfx_draw_pixel(x0 + x, y0 + y, color);
+        gfx_draw_pixel(x0 + y, y0 + x, color);
+        gfx_draw_pixel(x0 - y, y0 + x, color);
+        gfx_draw_pixel(x0 - x, y0 + y, color);
+        gfx_draw_pixel(x0 - x, y0 - y, color);
+        gfx_draw_pixel(x0 - y, y0 - x, color);
+        gfx_draw_pixel(x0 + y, y0 - x, color);
+        gfx_draw_pixel(x0 + x, y0 - y, color);
+
+        y++;
+        if (err < 0) {
+            err += 2 * y + 1;
+        } else {
+            x--;
+            err += 2 * (y - x) + 1;
+        }
+    }
+}
+
+void gfx_fill_circle(int x0, int y0, int r, u16 color) {
+    int y;
+
+    for (y = -r; y <= r; y++) {
+        int x;
+        int span = 0;
+
+        while ((span + 1) * (span + 1) + y * y <= r * r) {
+            span++;
+        }
+
+        for (x = -span + 1; x <= span - 1; x++) {
+            gfx_draw_pixel(x0 + x, y0 + y, color);
+        }
+    }
 }
 
 void gfx_draw_sprite_overwrite(int x, int y, const unsigned char* sprite, int frame) {
@@ -407,7 +510,17 @@ void gfx_set_text_bg(int c) {
 }
 
 void gfx_set_invert(bool enable) {
-    (void)enable;
+    if (invert_enabled != enable) {
+        invert_enabled = enable;
+        memset(dirty_rows, 1, sizeof(dirty_rows));
+        full_redraw_needed = true;
+    }
+}
+
+void gfx_set_rgb_led(u8 r, u8 g, u8 b) {
+    led_r = r;
+    led_g = g;
+    led_b = b;
 }
 
 void gfx_write_char(char c) {

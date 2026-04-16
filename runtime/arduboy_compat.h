@@ -51,6 +51,8 @@
 #define CLEAR_BUFFER 1
 #define HEX 16
 
+#define EEPROM_STORAGE_SPACE_START 0
+
 #define AB_CHAR_WIDTH 5
 #define AB_CHAR_HEIGHT 7
 #define AB_CHAR_SPACING 1
@@ -76,6 +78,7 @@ void ab_fillRect(int x, int y, int w, int h, int c = WHITE);
 void ab_fillScreen(int c = BLACK);
 void ab_drawCircle(int x, int y, int r, int c = WHITE);
 void ab_fillCircle(int x, int y, int r, int c = WHITE);
+void ab_drawLine(int x0, int y0, int x1, int y1, int c = WHITE);
 void ab_drawBitmap(int x, int y, const unsigned char* bmp, int w, int h, int c = WHITE);
 
 void ab_drawOverwrite(int x, int y, const unsigned char* sprite, int frame = 0);
@@ -145,6 +148,15 @@ int ab_get_dropped_frames(void);
 int ab_get_last_present_ticks(void);
 int ab_get_max_present_ticks(void);
 
+class EEPROMClass {
+public:
+    unsigned char read(int address) const;
+    void write(int address, unsigned char value);
+    void update(int address, unsigned char value);
+};
+
+extern EEPROMClass EEPROM;
+
 class ArduboyAudioShim;
 
 class ArduboyAudioEnabledProxy {
@@ -200,14 +212,23 @@ public:
     void fillScreen(int c = BLACK) { ab_fillScreen(c); }
     void drawCircle(int x, int y, int r, int c = WHITE) { ab_drawCircle(x, y, r, c); }
     void fillCircle(int x, int y, int r, int c = WHITE) { ab_fillCircle(x, y, r, c); }
+    void drawLine(int x0, int y0, int x1, int y1, int c = WHITE) { ab_drawLine(x0, y0, x1, y1, c); }
     void drawBitmap(int x, int y, const unsigned char* bmp, int w, int h, int c = WHITE) { ab_drawBitmap(x, y, bmp, w, h, c); }
     void drawSlowXYBitmap(int x, int y, const unsigned char* bmp, int w, int h, int c = WHITE) { ab_drawBitmap(x, y, bmp, w, h, c); }
 
     void setCursor(int x, int y) { ab_setCursor(x, y); }
     void setTextSize(int s) { ab_setTextSize(s); }
     void setTextWrap(bool w) { ab_setTextWrap(w); }
+    bool getTextWrap() const { return ab_getTextWrap(); }
+    void setTextRawMode(bool r) { ab_setTextRawMode(r); }
+    bool getTextRawMode() const { return ab_getTextRawMode(); }
     void setTextColor(int c) { ab_setTextColor(c); }
     void setTextBackground(int c) { ab_setTextBackground(c); }
+
+    static constexpr uint8_t getCharacterWidth() { return AB_CHAR_WIDTH; }
+    static constexpr uint8_t getCharacterSpacing() { return AB_CHAR_SPACING; }
+    static constexpr uint8_t getCharacterHeight() { return AB_CHAR_HEIGHT; }
+    static constexpr uint8_t getLineSpacing() { return AB_LINE_SPACING; }
 
     void print(const char* s) { ab_print(s); }
     void print(int v) { ab_print(v); }
@@ -230,6 +251,7 @@ public:
 
     void setFrameRate(int fps) { ab_setFrameRate(fps); }
     bool nextFrame() { return ab_nextFrame(); }
+    void idle() { ab_idle(); }
 
     void delayShort(unsigned long ms) { ab_delay((int)ms); }
 
@@ -260,12 +282,9 @@ public:
     }
 
     template <typename T>
-    unsigned int freq(T hz) const {
+    constexpr unsigned int freq(T hz) const {
         double value = (double)hz;
-        if (value <= 0.0) {
-            return 0;
-        }
-        return (unsigned int)(value + 0.5);
+        return (value <= 0.0) ? 0u : (unsigned int)(value + 0.5);
     }
 
     void tone(unsigned int freq_hz, unsigned long dur = 0) {

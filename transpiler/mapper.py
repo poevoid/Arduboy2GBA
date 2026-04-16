@@ -39,6 +39,7 @@ DIRECT_MAPPINGS = {
     "arduboy.fillScreen": "ab_fillScreen",
     "arduboy.drawCircle": "ab_drawCircle",
     "arduboy.fillCircle": "ab_fillCircle",
+    "arduboy.drawLine": "ab_drawLine",
 
     # Sprites APIs
     "Sprites::drawOverwrite": "ab_drawOverwrite",
@@ -122,21 +123,6 @@ def apply_direct_mappings(code):
 
 
 def find_function_definitions(code):
-    """
-    Find actual function definitions only.
-
-    Supports both:
-      void foo()
-      {
-      }
-
-    and:
-      void foo() {
-      }
-
-    Avoids matching object declarations like:
-      ArduboyPlaytune tunes(arduboy.audio.enabled);
-    """
     functions = []
     seen = set()
     keywords = {"if", "for", "while", "switch", "return"}
@@ -216,6 +202,7 @@ def build_header_block():
         "",
         "#include <math.h>",
         "#include <string.h>",
+        "#include <stdio.h>",
         "",
     ])
 

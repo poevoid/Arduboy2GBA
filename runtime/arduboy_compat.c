@@ -5,19 +5,33 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <gba_systemcalls.h>
+
+#define GBA_SRAM_BASE ((volatile unsigned char*)0x0E000000)
+#define GBA_SRAM_SIZE 0x10000
+
+/*
+    Many emulators/patchers/loaders look for one of Nintendo's save type
+    marker strings in the ROM image. Keeping this in the binary helps the
+    ROM get recognized as SRAM-backed.
+*/
+__attribute__((used))
+static const char g_gba_save_type_string[] = "SRAM_V113";
 
 static int g_frame_rate = 60;
 static int g_frame_duration_vblanks = 1;
 static int g_frame_counter = 0;
 static float g_time_scale = 1.0f;
 static bool g_audio_enabled = true;
+static bool g_input_polled_this_frame = false;
 
 static u8 g_led_r = 0;
 static u8 g_led_g = 0;
 static u8 g_led_b = 0;
 
 Arduboy2Base arduboy;
+EEPROMClass EEPROM;
 
 static void sync_led_state(void) {
     gfx_set_rgb_led(g_led_r, g_led_g, g_led_b);
@@ -48,6 +62,29 @@ static void print_unsigned_base(unsigned int v, int base) {
     gfx_write_string(buf);
 }
 
+unsigned char EEPROMClass::read(int address) const {
+    if (address < 0 || address >= GBA_SRAM_SIZE) {
+        return 0;
+    }
+    return GBA_SRAM_BASE[address];
+}
+
+void EEPROMClass::write(int address, unsigned char value) {
+    if (address < 0 || address >= GBA_SRAM_SIZE) {
+        return;
+    }
+    GBA_SRAM_BASE[address] = value;
+}
+
+void EEPROMClass::update(int address, unsigned char value) {
+    if (address < 0 || address >= GBA_SRAM_SIZE) {
+        return;
+    }
+    if (GBA_SRAM_BASE[address] != value) {
+        GBA_SRAM_BASE[address] = value;
+    }
+}
+
 void ab_setTimeScale(float scale) {
     if (scale <= 0.0f) {
         scale = 1.0f;
@@ -63,6 +100,7 @@ void ab_begin(void) {
     gfx_init();
     audio_init();
     input_poll();
+    g_input_polled_this_frame = true;
     g_frame_rate = 60;
     g_frame_duration_vblanks = 1;
     g_frame_counter = 0;
@@ -131,6 +169,32 @@ void ab_drawCircle(int x, int y, int r, int c) {
 
 void ab_fillCircle(int x, int y, int r, int c) {
     gfx_fill_circle(x, y, r, c);
+}
+
+void ab_drawLine(int x0, int y0, int x1, int y1, int c) {
+    int dx = abs(x1 - x0);
+    int sx = x0 < x1 ? 1 : -1;
+    int dy = -abs(y1 - y0);
+    int sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+
+    while (1) {
+        ab_drawPixel(x0, y0, c);
+        if (x0 == x1 && y0 == y1) {
+            break;
+        }
+        {
+            int e2 = err << 1;
+            if (e2 >= dy) {
+                err += dy;
+                x0 += sx;
+            }
+            if (e2 <= dx) {
+                err += dx;
+                y0 += sy;
+            }
+        }
+    }
 }
 
 void ab_drawBitmap(int x, int y, const unsigned char* bmp, int w, int h, int c) {
@@ -257,7 +321,10 @@ void ab_println(float v) {
 }
 
 void ab_pollButtons(void) {
-    input_poll();
+    if (!g_input_polled_this_frame) {
+        input_poll();
+        g_input_polled_this_frame = true;
+    }
 }
 
 bool ab_pressed(u16 key) {
@@ -301,8 +368,11 @@ bool ab_nextFrame(void) {
 
     if (g_frame_counter >= g_frame_duration_vblanks) {
         g_frame_counter = 0;
+        g_input_polled_this_frame = false;
         VBlankIntrWait();
         audio_update();
+        input_poll();
+        g_input_polled_this_frame = true;
         return true;
     }
 
@@ -334,11 +404,15 @@ void ab_delay(int ms) {
         VBlankIntrWait();
         audio_update();
     }
+
+    g_input_polled_this_frame = false;
 }
 
 void ab_idle(void) {
     VBlankIntrWait();
     audio_update();
+    input_poll();
+    g_input_polled_this_frame = true;
 }
 
 int ab_random(int min, int max) {

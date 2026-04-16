@@ -164,6 +164,13 @@ static inline void mark_row_dirty(int y) {
     }
 }
 
+static inline void put_pixel_direct(int x, int y, u16 mapped) {
+    if (x < 0 || y < 0 || x >= ARDU_W || y >= ARDU_H) {
+        return;
+    }
+    backbuffer[y * ARDU_W + x] = mapped;
+}
+
 static void draw_led_indicator(void) {
     int left = ox - LED_INDICATOR_SPACING - LED_INDICATOR_SIZE;
     int top = oy + (ARDU_H - LED_INDICATOR_SIZE) / 2;
@@ -528,6 +535,9 @@ void gfx_write_char(char c) {
     int col, row;
     int cell_w = 6 * text_size;
     int cell_h = 8 * text_size;
+    u16 fg = mono_to_color(text_color);
+    u16 bg = mono_to_color(text_bg);
+    int y_start, y_end;
 
     if (!text_raw) {
         if (c == '\n') {
@@ -551,18 +561,74 @@ void gfx_write_char(char c) {
         glyph = (unsigned char)c - 32;
     }
 
+    y_start = cursor_y;
+    y_end = cursor_y + cell_h - 1;
+    if (y_start < 0) y_start = 0;
+    if (y_end >= ARDU_H) y_end = ARDU_H - 1;
+    for (row = y_start; row <= y_end; row++) {
+        mark_row_dirty(row);
+    }
+
+    if (text_size == 1) {
+        for (col = 0; col < 5; col++) {
+            unsigned char bits = font5x7[glyph][col];
+            int px = cursor_x + col;
+
+            if (px < 0 || px >= ARDU_W) {
+                continue;
+            }
+
+            for (row = 0; row < 7; row++) {
+                int py = cursor_y + row;
+                if (py < 0 || py >= ARDU_H) {
+                    continue;
+                }
+                backbuffer[py * ARDU_W + px] = ((bits >> row) & 1) ? fg : bg;
+            }
+        }
+
+        {
+            int x = cursor_x + 5;
+            if (x >= 0 && x < ARDU_W) {
+                for (row = 0; row < 8; row++) {
+                    int py = cursor_y + row;
+                    if (py < 0 || py >= ARDU_H) {
+                        continue;
+                    }
+                    backbuffer[py * ARDU_W + x] = bg;
+                }
+            }
+        }
+
+        {
+            int py = cursor_y + 7;
+            if (py >= 0 && py < ARDU_H) {
+                int start_x = cursor_x;
+                int end_x = cursor_x + 5;
+                if (start_x < 0) start_x = 0;
+                if (end_x >= ARDU_W) end_x = ARDU_W - 1;
+                for (col = start_x; col <= end_x; col++) {
+                    backbuffer[py * ARDU_W + col] = bg;
+                }
+            }
+        }
+
+        cursor_x += cell_w;
+        return;
+    }
+
     for (col = 0; col < 5; col++) {
         unsigned char bits = font5x7[glyph][col];
         for (row = 0; row < 7; row++) {
             int px, py;
-            int on = (bits >> row) & 1;
+            u16 mapped = ((bits >> row) & 1) ? fg : bg;
 
             for (py = 0; py < text_size; py++) {
                 for (px = 0; px < text_size; px++) {
-                    gfx_draw_pixel(
+                    put_pixel_direct(
                         cursor_x + col * text_size + px,
                         cursor_y + row * text_size + py,
-                        on ? text_color : text_bg
+                        mapped
                     );
                 }
             }
@@ -576,8 +642,7 @@ void gfx_write_char(char c) {
         for (px = 0; px < text_size; px++) {
             int x = cursor_x + 5 * text_size + px;
             if (x >= 0 && x < ARDU_W) {
-                backbuffer[py * ARDU_W + x] = mono_to_color(text_bg);
-                mark_row_dirty(py);
+                backbuffer[py * ARDU_W + x] = bg;
             }
         }
     }
@@ -589,8 +654,7 @@ void gfx_write_char(char c) {
         for (py = 0; py < text_size; py++) {
             int y = cursor_y + 7 * text_size + py;
             if (y >= 0 && y < ARDU_H) {
-                backbuffer[y * ARDU_W + x] = mono_to_color(text_bg);
-                mark_row_dirty(y);
+                backbuffer[y * ARDU_W + x] = bg;
             }
         }
     }

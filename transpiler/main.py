@@ -9,7 +9,7 @@ from optimizer import optimize_generated_c
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("-o", "--input", required=True, help="Input .ino file")
+    ap.add_argument("-in", "--input", required=True, help="Input .ino file")
     ap.add_argument("--run", action="store_true", help="Build after transpiling")
     ap.add_argument(
         "--time-scale",

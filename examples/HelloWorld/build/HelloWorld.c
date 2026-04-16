@@ -2,11 +2,6 @@
 
 #include <math.h>
 #include <string.h>
-
-void setup();
-void loop();
-
-
 /*
 Hello, World! example
 June 11, 2015
@@ -24,6 +19,9 @@ version 2.1 of the License, or (at your option) any later version.
 
 // This function runs once in your game.
 // use it for anything that needs to be set only once in your game.
+void setup();
+void loop();
+
 void setup() {
   // initiate arduboy instance
   ab_begin();
@@ -49,7 +47,7 @@ void loop() {
   ab_setCursor(4, 9);
 
   // then we print to screen what is in the Quotation marks ""
-  ab_print("Hello, world!");
+  arduboy.print("Hello, world!");
 
   // then we finally we tell the arduboy to display what we just wrote to the display
   ab_display();

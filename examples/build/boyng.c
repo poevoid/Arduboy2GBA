@@ -2,27 +2,6 @@
 
 #include <math.h>
 #include <string.h>
-
-void setze_variablen_vor_spielstart();
-void setze_variablen_nach_punktgewinn();
-void zeichne_und_zeige_titel_und_menue();
-void zeichne_titel();
-void zeige_startschirm_und_fuehre_menue_aus();
-void zeige_spielende();
-void zeichne_spielfeld();
-void bewege_ball();
-void male_ball(bool color);
-void bewege_schlaeger();
-void bewege_schlaeger_ai1();
-void bewege_schlaeger_ai2();
-void male_schlaeger(bool color);
-void pruefe_treffer();
-void fuehre_anstoss_aus();
-float map_float(float x, float x0, float x1, float y0, float y1);
-void setup();
-void loop();
-
-
 /*
  * ArduBOYNG
  * 
@@ -222,6 +201,25 @@ bool anstoss = true;                                       // Steuervariable: Am
 // Setze Variablen vor Spielstart
 //   - Übersetze Menüauswahl in Variablenwerte
 //   - Setze Anfangswerte für Schläger, Ball, Punkte, etc. 
+void setze_variablen_vor_spielstart();
+void setze_variablen_nach_punktgewinn();
+void zeichne_und_zeige_titel_und_menue();
+void zeichne_titel();
+void zeige_startschirm_und_fuehre_menue_aus();
+void zeige_spielende();
+void zeichne_spielfeld();
+void bewege_ball();
+void male_ball(bool color);
+void bewege_schlaeger();
+void bewege_schlaeger_ai1();
+void bewege_schlaeger_ai2();
+void male_schlaeger(bool color);
+void pruefe_treffer();
+void fuehre_anstoss_aus();
+float map_float(float x, float x0, float x1, float y0, float y1);
+void setup();
+void loop();
+
 void setze_variablen_vor_spielstart() {
   // Menüauswahl Mode 
   ai1 = MENUE_MODE_WERTE[menueAuswahlen[0]][0];
@@ -286,24 +284,24 @@ void zeichne_und_zeige_titel_und_menue() {
   zeichne_titel();                                            // Zeichne den oberen Teil des Titel-/Menü-Bildschirms, d.h. den Titel
   // Zeichne die Hauptzeile des Menüs
   ab_setCursor(MENUE_X,MENUE_Y);
-  ab_print(MENUE_HAUPTZEILE_EINLEITUNG);
-  ab_print(MENUE_TEXTE[menueZeile][MENUE_AUSWAHLMOEGLICHKEITEN[menueZeile]+1]);
-  ab_print(MENUE_TEXTE[menueZeile][menueAuswahlen[menueZeile]]);
+  arduboy.print(MENUE_HAUPTZEILE_EINLEITUNG);
+  arduboy.print(MENUE_TEXTE[menueZeile][MENUE_AUSWAHLMOEGLICHKEITEN[menueZeile]+1]);
+  arduboy.print(MENUE_TEXTE[menueZeile][menueAuswahlen[menueZeile]]);
   ab_setCursor(MENUE_X_ABSCHLUSS, MENUE_Y);
-  ab_print(MENUE_HAUPTZEILE_ABSCHLUSS);
+  arduboy.print(MENUE_HAUPTZEILE_ABSCHLUSS);
   // Zeichne die Menüzeile darüber
   if (menueZeile > 0) {
     ab_setCursor(MENUE_X,MENUE_Y-MENUE_Y_DELTA);
-    ab_print("   ");
-    ab_print(MENUE_TEXTE[menueZeile-1][MENUE_AUSWAHLMOEGLICHKEITEN[menueZeile-1]+1]);
-    ab_print(MENUE_TEXTE[menueZeile-1][menueAuswahlen[menueZeile-1]]);        
+    arduboy.print("   ");
+    arduboy.print(MENUE_TEXTE[menueZeile-1][MENUE_AUSWAHLMOEGLICHKEITEN[menueZeile-1]+1]);
+    arduboy.print(MENUE_TEXTE[menueZeile-1][menueAuswahlen[menueZeile-1]]);        
   }
   // Zeichne die Menüzeile darunter
   if (menueZeile < MENUE_ZEILEN) {
     ab_setCursor(MENUE_X,MENUE_Y+MENUE_Y_DELTA);
-    ab_print("   ");
-    ab_print(MENUE_TEXTE[menueZeile+1][MENUE_AUSWAHLMOEGLICHKEITEN[menueZeile+1]+1]);
-    ab_print(MENUE_TEXTE[menueZeile+1][menueAuswahlen[menueZeile+1]]);        
+    arduboy.print("   ");
+    arduboy.print(MENUE_TEXTE[menueZeile+1][MENUE_AUSWAHLMOEGLICHKEITEN[menueZeile+1]+1]);
+    arduboy.print(MENUE_TEXTE[menueZeile+1][menueAuswahlen[menueZeile+1]]);        
   }
   ab_display();                                          // Zeige den Bildschirminhalt an
 }
@@ -314,13 +312,13 @@ void zeichne_und_zeige_titel_und_menue() {
 void zeichne_titel() {
   ab_setTextSize(1);
   ab_setCursor( 51, 0 );
-  ab_print(TITEL1);
+  arduboy.print(TITEL1);
   ab_setTextSize(2);
   ab_setCursor( 33, 9 );
-  ab_print(TITEL2);
+  arduboy.print(TITEL2);
   ab_setTextSize(1);
   ab_setCursor( 48, 27 );
-  ab_print(UNTERTITEL);
+  arduboy.print(UNTERTITEL);
 }
 
 // Zeige den Startbildschirm (Titel und Menü und führe das Menü aus - bis Starttaste gedrückt)
@@ -391,12 +389,12 @@ void zeige_spielende() {
   // Falls Gleichstand, zeige "Tied" - nur der Vollständidgkeit halber hier. Sollte bei aktueller Programmierung nicht vorkommen
   if ( punkte1 == punkte2 ) {                                 
     ab_setCursor(52, 28);
-    ab_print("Tied");
+    arduboy.print("Tied");
   } else {
     // Zeige "Winner" im Spielfeld des Siegers
     if ( punkte1 > punkte2 ) ab_setCursor(13, 28);   
     if ( punkte2 > punkte1 ) ab_setCursor(77, 28);
-    ab_print("Winner");
+    arduboy.print("Winner");
   } 
   ab_display();
   if (sound) ab_tone(TON_GAMEOVER_FREQ,TON_GAMEOVER_DAUER);
@@ -423,7 +421,7 @@ void zeichne_spielfeld() {
   // Zeige diverse Debug-Informationen auf dem Spielfeld an
   if (debug) {
     ab_setCursor(52,54);
-    ab_print(v);
+    arduboy.print(v);
   }
 }
 
@@ -571,9 +569,9 @@ void pruefe_treffer() {
   }
   // Zeige die Punktzahlen an
   ab_setCursor( PUNKTE1_X, PUNKTE1_Y );
-  ab_print(punkte1);
+  arduboy.print(punkte1);
   ab_setCursor( PUNKTE2_X, PUNKTE2_Y );
-  ab_print(punkte2);
+  arduboy.print(punkte2);
   ab_display();
   // Prüfe, ob ein Spieler die Siegespunktzahl erreicht hat
   if ( ( punkte1 >= punkteMax ) || ( punkte2 >= punkteMax ) ) {                   // Falls ein Spieler gewonnen hat...
@@ -590,7 +588,7 @@ void fuehre_anstoss_aus() {
   ab_delay(COUNTDOWN_VERZOEGERUNG);
   for ( int k = 3; k > 0 ; k-- ) {                            // Countdown von 3 bis 1
     ab_setCursor( 61, 28 );
-    ab_print(k);
+    arduboy.print(k);
     ab_display();
     if (sound) ab_tone(TON_COUNTDOWN_FREQ, TON_COUNTDOWN_DAUER);
     ab_delay(COUNTDOWN_VERZOEGERUNG);

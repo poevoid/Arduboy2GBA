@@ -2,12 +2,6 @@
 
 #include <math.h>
 #include <string.h>
-
-void setup();
-void loop();
-void commandText(const char* text);
-
-
 /*
 BeepDemo.ino
 
@@ -37,6 +31,10 @@ BeepPin1 beep; // Create a class instance for speaker pin 1
 int objectX = 0;
 
 char displayText[60];
+
+void setup();
+void loop();
+void commandText(const char* text);
 
 void setup() {
   ab_begin();
@@ -109,8 +107,8 @@ void loop() {
     commandText("beep.noTone()");
   }
 
-  ab_println(F("Last command:"));
-  ab_print(displayText);
+  arduboy.println(F("Last command:"));
+  arduboy.print(displayText);
 
   // The Arduboy2 class's audio subclass controls sound muting.
   // For this sketch, mute or unmute can be set using the "System Control"
@@ -118,17 +116,17 @@ void loop() {
   // press UP to enable sound or DOWN for mute.)
   if (!arduboy.audio.enabled()) {
     ab_setCursor(22, 40);
-    ab_print(F("Sound is MUTED"));
+    arduboy.print(F("Sound is MUTED"));
   }
 
   ab_setCursor(0, 48);
   // The "duration" variable can be tested for non-zero to determine if a
   // timed tone is currently playing.
   if (beep.duration != 0) {
-    ab_print(F("A tone is playing"));
+    arduboy.print(F("A tone is playing"));
   }
   else {
-    ab_print(F("Continuous tone or\nno tone playing"));
+    arduboy.print(F("Continuous tone or\nno tone playing"));
   }
 
   ab_drawRect(objectX, 40, 6, 6);

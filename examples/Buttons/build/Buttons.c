@@ -2,11 +2,6 @@
 
 #include <math.h>
 #include <string.h>
-
-void setup();
-void loop();
-
-
 /*
 Buttons example
 June 11, 2015
@@ -51,6 +46,9 @@ unsigned char y;
 
 // This function runs once in your game.
 // use it for anything that needs to be set only once in your game.
+void setup();
+void loop();
+
 void setup() {
   //initiate arduboy instance
   ab_begin();
@@ -105,7 +103,7 @@ void loop() {
   ab_setCursor(x, y);
 
   // then we print to screen what is stored in our title variable we declared earlier
-  ab_print(title);
+  arduboy.print(title);
 
   // then we finally we tell the arduboy to display what we just wrote to the display.
   ab_display();

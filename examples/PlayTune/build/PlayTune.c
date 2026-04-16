@@ -2,13 +2,6 @@
 
 #include <math.h>
 #include <string.h>
-
-ArduboyPlaytune tunes(arduboy.audio.enabled);
-
-void setup();
-void loop();
-
-
 /***************************************************************
 Play a musical composition in the background while
 the main sketch code runs in the foreground.
@@ -136,6 +129,9 @@ const unsigned char score[] PROGMEM = {
 
 ArduboyPlaytune tunes(arduboy.audio.enabled);
 
+void setup();
+void loop();
+
 void setup()
 {
   ab_begin();
@@ -190,9 +186,9 @@ void loop()
 
   ab_clear();
   ab_setCursor(x,y);
-  ab_print("Music");
+  arduboy.print("Music");
   ab_setCursor(x+8,y+24);
-  ab_print("Demo");
+  arduboy.print("Demo");
   ab_display();
 
   // play the tune if we aren't already

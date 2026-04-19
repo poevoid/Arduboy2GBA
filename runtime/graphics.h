@@ -17,6 +17,7 @@ void gfx_fill_screen(u16 color);
 void gfx_draw_bitmap(int x, int y, const unsigned char* bmp, int w, int h);
 void gfx_draw_circle(int x0, int y0, int r, u16 color);
 void gfx_fill_circle(int x0, int y0, int r, u16 color);
+void gfx_draw_round_rect(int x, int y, int w, int h, int r, u16 color);
 
 void gfx_draw_sprite_overwrite(int x, int y, const unsigned char* sprite, int frame);
 void gfx_draw_sprite_self_masked(int x, int y, const unsigned char* sprite, int frame);

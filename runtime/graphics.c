@@ -1,13 +1,17 @@
 #include "graphics.h"
+#include "background.h"
+
 #include <gba_video.h>
 #include <gba_dma.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
 
 #define GBA_WIDTH 240
 #define GBA_HEIGHT 160
 #define ARDU_W 128
 #define ARDU_H 64
+#define ARDU_PAGES (ARDU_H / 8)
 
 #define COLOR_BLACK 0x0000
 #define COLOR_WHITE 0x7FFF
@@ -15,10 +19,15 @@
 #define LED_INDICATOR_SIZE 16
 #define LED_INDICATOR_RADIUS 8
 #define LED_INDICATOR_SPACING 6
+#define LED_OFFSET_X -4
+#define LED_OFFSET_Y 1
 
 static volatile u16* vram = (volatile u16*)0x6000000;
-static u16 backbuffer[ARDU_W * ARDU_H] __attribute__((section(".ewram"), aligned(4)));
-static unsigned char dirty_rows[ARDU_H] __attribute__((section(".ewram"), aligned(4)));
+
+/* Native Arduboy-style packed framebuffer: 128 x 64 / 8 = 1024 bytes */
+static unsigned char mono_buffer[ARDU_W * ARDU_PAGES] __attribute__((section(".ewram"), aligned(4)));
+static unsigned char dirty_pages[ARDU_PAGES] __attribute__((section(".ewram"), aligned(4)));
+static u16 row_expand[ARDU_W] __attribute__((section(".ewram"), aligned(4)));
 
 static int ox = (GBA_WIDTH - ARDU_W) / 2;
 static int oy = (GBA_HEIGHT - ARDU_H) / 2;
@@ -158,25 +167,69 @@ static inline void dma_copy_row_16(const u16* src, volatile u16* dst, int count)
     REG_DMA3CNT = DMA_ENABLE | DMA16 | count;
 }
 
-static inline void mark_row_dirty(int y) {
-    if (y >= 0 && y < ARDU_H) {
-        dirty_rows[y] = 1;
+static inline void mark_page_dirty(int page) {
+    if (page >= 0 && page < ARDU_PAGES) {
+        dirty_pages[page] = 1;
     }
 }
 
-static inline void put_pixel_direct(int x, int y, u16 mapped) {
+static inline void mark_y_dirty(int y) {
+    if (y >= 0 && y < ARDU_H) {
+        dirty_pages[y >> 3] = 1;
+    }
+}
+
+static inline void mark_y_span_dirty(int y0, int y1) {
+    int p0;
+    int p1;
+    int p;
+
+    if (y1 < 0 || y0 >= ARDU_H) return;
+    if (y0 < 0) y0 = 0;
+    if (y1 >= ARDU_H) y1 = ARDU_H - 1;
+
+    p0 = y0 >> 3;
+    p1 = y1 >> 3;
+    for (p = p0; p <= p1; ++p) {
+        dirty_pages[p] = 1;
+    }
+}
+
+static inline void mono_set_pixel_raw(int x, int y, int value) {
+    unsigned char* cell;
+    unsigned char mask;
+
     if (x < 0 || y < 0 || x >= ARDU_W || y >= ARDU_H) {
         return;
     }
-    backbuffer[y * ARDU_W + x] = mapped;
+
+    cell = &mono_buffer[(y >> 3) * ARDU_W + x];
+    mask = (unsigned char)(1u << (y & 7));
+
+    if (value) {
+        *cell |= mask;
+    } else {
+        *cell &= (unsigned char)~mask;
+    }
+
+    mark_y_dirty(y);
+}
+
+static void copy_background_to_vram(void) {
+    REG_DMA3CNT = 0;
+    REG_DMA3SAD = (u32)gba_background;
+    REG_DMA3DAD = (u32)vram;
+    REG_DMA3CNT = DMA_ENABLE | DMA16 | (GBA_WIDTH * GBA_HEIGHT);
+    REG_DMA3CNT = 0;
 }
 
 static void draw_led_indicator(void) {
-    int left = ox - LED_INDICATOR_SPACING - LED_INDICATOR_SIZE;
-    int top = oy + (ARDU_H - LED_INDICATOR_SIZE) / 2;
+    int left = ox - LED_INDICATOR_SPACING - LED_INDICATOR_SIZE + LED_OFFSET_X;
+    int top = oy + (ARDU_H - LED_INDICATOR_SIZE) / 2 + LED_OFFSET_Y;
     int cx = left + LED_INDICATOR_RADIUS;
     int cy = top + LED_INDICATOR_RADIUS;
     int y;
+    bool led_is_off = (led_r == 0 && led_g == 0 && led_b == 0);
 
     u16 fill = rgb888_to_gba555(led_r, led_g, led_b);
     u16 border = COLOR_WHITE;
@@ -209,7 +262,9 @@ static void draw_led_indicator(void) {
             dist2 = dx * dx + dy * dy;
 
             if (dist2 <= (LED_INDICATOR_RADIUS - 1) * (LED_INDICATOR_RADIUS - 1)) {
-                vram[py * GBA_WIDTH + px] = fill;
+                if (!led_is_off) {
+                    vram[py * GBA_WIDTH + px] = fill;
+                }
             } else if (dist2 <= LED_INDICATOR_RADIUS * LED_INDICATOR_RADIUS) {
                 vram[py * GBA_WIDTH + px] = border;
             }
@@ -217,48 +272,293 @@ static void draw_led_indicator(void) {
     }
 }
 
+static void expand_page_row_to_scanline(int page, int row_in_page) {
+    int x;
+    unsigned char mask = (unsigned char)(1u << row_in_page);
+    const unsigned char* src = &mono_buffer[page * ARDU_W];
+
+    for (x = 0; x < ARDU_W; ++x) {
+        row_expand[x] = mono_to_color((src[x] & mask) != 0);
+    }
+}
+
+static void blit_bytes_overwrite(int x, int y, const unsigned char* src, int w, int h) {
+    int src_pages;
+    int dst_page;
+    int yshift;
+    int sx;
+
+    if (!src || w <= 0 || h <= 0) return;
+    if (x <= -w || x >= ARDU_W || y <= -h || y >= ARDU_H) return;
+
+    src_pages = (h + 7) >> 3;
+    dst_page = y >> 3;
+    yshift = y & 7;
+
+    for (sx = 0; sx < w; ++sx) {
+        int dx = x + sx;
+        int sp;
+
+        if (dx < 0 || dx >= ARDU_W) continue;
+
+        for (sp = 0; sp < src_pages; ++sp) {
+            unsigned char s = src[sx + sp * w];
+            int dp = dst_page + sp;
+
+            if (yshift == 0) {
+                if (dp >= 0 && dp < ARDU_PAGES) {
+                    mono_buffer[dp * ARDU_W + dx] = s;
+                }
+            } else {
+                if (dp >= 0 && dp < ARDU_PAGES) {
+                    mono_buffer[dp * ARDU_W + dx] =
+                        (unsigned char)((mono_buffer[dp * ARDU_W + dx] & ((1u << yshift) - 1u)) | (s << yshift));
+                }
+                if (dp + 1 >= 0 && dp + 1 < ARDU_PAGES) {
+                    mono_buffer[(dp + 1) * ARDU_W + dx] =
+                        (unsigned char)((mono_buffer[(dp + 1) * ARDU_W + dx] & (0xFFu << yshift)) | (s >> (8 - yshift)));
+                }
+            }
+        }
+    }
+
+    mark_y_span_dirty(y, y + h - 1);
+}
+
+static void blit_bytes_self_masked(int x, int y, const unsigned char* src, int w, int h) {
+    int src_pages;
+    int dst_page;
+    int yshift;
+    int sx;
+
+    if (!src || w <= 0 || h <= 0) return;
+    if (x <= -w || x >= ARDU_W || y <= -h || y >= ARDU_H) return;
+
+    src_pages = (h + 7) >> 3;
+    dst_page = y >> 3;
+    yshift = y & 7;
+
+    for (sx = 0; sx < w; ++sx) {
+        int dx = x + sx;
+        int sp;
+
+        if (dx < 0 || dx >= ARDU_W) continue;
+
+        for (sp = 0; sp < src_pages; ++sp) {
+            unsigned char s = src[sx + sp * w];
+            int dp = dst_page + sp;
+
+            if (s == 0) continue;
+
+            if (yshift == 0) {
+                if (dp >= 0 && dp < ARDU_PAGES) {
+                    mono_buffer[dp * ARDU_W + dx] |= s;
+                }
+            } else {
+                if (dp >= 0 && dp < ARDU_PAGES) {
+                    mono_buffer[dp * ARDU_W + dx] |= (unsigned char)(s << yshift);
+                }
+                if (dp + 1 >= 0 && dp + 1 < ARDU_PAGES) {
+                    mono_buffer[(dp + 1) * ARDU_W + dx] |= (unsigned char)(s >> (8 - yshift));
+                }
+            }
+        }
+    }
+
+    mark_y_span_dirty(y, y + h - 1);
+}
+
+static void blit_bytes_erase(int x, int y, const unsigned char* src, int w, int h) {
+    int src_pages;
+    int dst_page;
+    int yshift;
+    int sx;
+
+    if (!src || w <= 0 || h <= 0) return;
+    if (x <= -w || x >= ARDU_W || y <= -h || y >= ARDU_H) return;
+
+    src_pages = (h + 7) >> 3;
+    dst_page = y >> 3;
+    yshift = y & 7;
+
+    for (sx = 0; sx < w; ++sx) {
+        int dx = x + sx;
+        int sp;
+
+        if (dx < 0 || dx >= ARDU_W) continue;
+
+        for (sp = 0; sp < src_pages; ++sp) {
+            unsigned char s = src[sx + sp * w];
+            int dp = dst_page + sp;
+
+            if (s == 0) continue;
+
+            if (yshift == 0) {
+                if (dp >= 0 && dp < ARDU_PAGES) {
+                    mono_buffer[dp * ARDU_W + dx] &= (unsigned char)~s;
+                }
+            } else {
+                if (dp >= 0 && dp < ARDU_PAGES) {
+                    mono_buffer[dp * ARDU_W + dx] &= (unsigned char)~(s << yshift);
+                }
+                if (dp + 1 >= 0 && dp + 1 < ARDU_PAGES) {
+                    mono_buffer[(dp + 1) * ARDU_W + dx] &= (unsigned char)~(s >> (8 - yshift));
+                }
+            }
+        }
+    }
+
+    mark_y_span_dirty(y, y + h - 1);
+}
+
+static void blit_bytes_plus_mask(int x, int y, const unsigned char* src, int w, int h) {
+    int src_pages;
+    int dst_page;
+    int yshift;
+    int sx;
+
+    if (!src || w <= 0 || h <= 0) return;
+    if (x <= -w || x >= ARDU_W || y <= -h || y >= ARDU_H) return;
+
+    src_pages = (h + 7) >> 3;
+    dst_page = y >> 3;
+    yshift = y & 7;
+
+    for (sx = 0; sx < w; ++sx) {
+        int dx = x + sx;
+        int sp;
+
+        if (dx < 0 || dx >= ARDU_W) continue;
+
+        for (sp = 0; sp < src_pages; ++sp) {
+            int idx = (sx + sp * w) * 2;
+            unsigned char image = src[idx];
+            unsigned char mask = src[idx + 1];
+            int dp = dst_page + sp;
+
+            if (mask == 0) continue;
+
+            if (yshift == 0) {
+                if (dp >= 0 && dp < ARDU_PAGES) {
+                    unsigned char* d = &mono_buffer[dp * ARDU_W + dx];
+                    *d = (unsigned char)((*d & (unsigned char)~mask) | (image & mask));
+                }
+            } else {
+                unsigned char image_lo = (unsigned char)(image << yshift);
+                unsigned char mask_lo = (unsigned char)(mask << yshift);
+                unsigned char image_hi = (unsigned char)(image >> (8 - yshift));
+                unsigned char mask_hi = (unsigned char)(mask >> (8 - yshift));
+
+                if (dp >= 0 && dp < ARDU_PAGES) {
+                    unsigned char* d0 = &mono_buffer[dp * ARDU_W + dx];
+                    *d0 = (unsigned char)((*d0 & (unsigned char)~mask_lo) | (image_lo & mask_lo));
+                }
+                if (dp + 1 >= 0 && dp + 1 < ARDU_PAGES) {
+                    unsigned char* d1 = &mono_buffer[(dp + 1) * ARDU_W + dx];
+                    *d1 = (unsigned char)((*d1 & (unsigned char)~mask_hi) | (image_hi & mask_hi));
+                }
+            }
+        }
+    }
+
+    mark_y_span_dirty(y, y + h - 1);
+}
+
+static void blit_bytes_external_mask(int x, int y, const unsigned char* image_src, const unsigned char* mask_src, int w, int h) {
+    int src_pages;
+    int dst_page;
+    int yshift;
+    int sx;
+
+    if (!image_src || !mask_src || w <= 0 || h <= 0) return;
+    if (x <= -w || x >= ARDU_W || y <= -h || y >= ARDU_H) return;
+
+    src_pages = (h + 7) >> 3;
+    dst_page = y >> 3;
+    yshift = y & 7;
+
+    for (sx = 0; sx < w; ++sx) {
+        int dx = x + sx;
+        int sp;
+
+        if (dx < 0 || dx >= ARDU_W) continue;
+
+        for (sp = 0; sp < src_pages; ++sp) {
+            unsigned char image = image_src[sx + sp * w];
+            unsigned char mask = mask_src[sx + sp * w];
+            int dp = dst_page + sp;
+
+            if (mask == 0) continue;
+
+            if (yshift == 0) {
+                if (dp >= 0 && dp < ARDU_PAGES) {
+                    unsigned char* d = &mono_buffer[dp * ARDU_W + dx];
+                    *d = (unsigned char)((*d & (unsigned char)~mask) | (image & mask));
+                }
+            } else {
+                unsigned char image_lo = (unsigned char)(image << yshift);
+                unsigned char mask_lo = (unsigned char)(mask << yshift);
+                unsigned char image_hi = (unsigned char)(image >> (8 - yshift));
+                unsigned char mask_hi = (unsigned char)(mask >> (8 - yshift));
+
+                if (dp >= 0 && dp < ARDU_PAGES) {
+                    unsigned char* d0 = &mono_buffer[dp * ARDU_W + dx];
+                    *d0 = (unsigned char)((*d0 & (unsigned char)~mask_lo) | (image_lo & mask_lo));
+                }
+                if (dp + 1 >= 0 && dp + 1 < ARDU_PAGES) {
+                    unsigned char* d1 = &mono_buffer[(dp + 1) * ARDU_W + dx];
+                    *d1 = (unsigned char)((*d1 & (unsigned char)~mask_hi) | (image_hi & mask_hi));
+                }
+            }
+        }
+    }
+
+    mark_y_span_dirty(y, y + h - 1);
+}
+
 void gfx_init(void) {
     REG_DISPCNT = MODE_3 | BG2_ENABLE;
+    copy_background_to_vram();
     gfx_clear();
 }
 
 void gfx_clear(void) {
-    memset(backbuffer, 0, sizeof(backbuffer));
-    memset(dirty_rows, 1, sizeof(dirty_rows));
+    memset(mono_buffer, 0, sizeof(mono_buffer));
+    memset(dirty_pages, 1, sizeof(dirty_pages));
     full_redraw_needed = true;
     cursor_x = 0;
     cursor_y = 0;
 }
 
 void gfx_present(void) {
-    int y;
+    int page;
+    for (page = 0; page < ARDU_PAGES; ++page) {
+        if (full_redraw_needed || dirty_pages[page]) {
+            int row;
+            for (row = 0; row < 8; ++row) {
+                int screen_y = page * 8 + row;
+                volatile u16* dst;
 
-    for (y = 0; y < ARDU_H; y++) {
-        if (full_redraw_needed || dirty_rows[y]) {
-            u16* src = &backbuffer[y * ARDU_W];
-            volatile u16* dst = &vram[(y + oy) * GBA_WIDTH + ox];
-            dma_copy_row_16(src, dst, ARDU_W);
-            dirty_rows[y] = 0;
+                expand_page_row_to_scanline(page, row);
+                dst = &vram[(oy + screen_y) * GBA_WIDTH + ox];
+                dma_copy_row_16(row_expand, dst, ARDU_W);
+            }
+            dirty_pages[page] = 0;
         }
     }
 
     REG_DMA3CNT = 0;
     full_redraw_needed = false;
-
     draw_led_indicator();
 }
 
 void gfx_draw_pixel(int x, int y, u16 color) {
-    if (x < 0 || y < 0 || x >= ARDU_W || y >= ARDU_H) {
-        return;
-    }
-    backbuffer[y * ARDU_W + x] = mono_to_color(color);
-    dirty_rows[y] = 1;
+    mono_set_pixel_raw(x, y, color ? 1 : 0);
 }
 
 void gfx_draw_fast_hline(int x, int y, int w, u16 color) {
     int i;
-    u16 mapped;
+    int bit;
 
     if (y < 0 || y >= ARDU_H || w <= 0) return;
     if (x < 0) {
@@ -270,16 +570,15 @@ void gfx_draw_fast_hline(int x, int y, int w, u16 color) {
     }
     if (w <= 0) return;
 
-    mapped = mono_to_color(color);
-    for (i = 0; i < w; i++) {
-        backbuffer[y * ARDU_W + x + i] = mapped;
+    bit = color ? 1 : 0;
+    for (i = 0; i < w; ++i) {
+        mono_set_pixel_raw(x + i, y, bit);
     }
-    dirty_rows[y] = 1;
 }
 
 void gfx_draw_fast_vline(int x, int y, int h, u16 color) {
     int i;
-    u16 mapped;
+    int bit;
 
     if (x < 0 || x >= ARDU_W || h <= 0) return;
     if (y < 0) {
@@ -291,10 +590,9 @@ void gfx_draw_fast_vline(int x, int y, int h, u16 color) {
     }
     if (h <= 0) return;
 
-    mapped = mono_to_color(color);
-    for (i = 0; i < h; i++) {
-        backbuffer[(y + i) * ARDU_W + x] = mapped;
-        dirty_rows[y + i] = 1;
+    bit = color ? 1 : 0;
+    for (i = 0; i < h; ++i) {
+        mono_set_pixel_raw(x, y + i, bit);
     }
 }
 
@@ -308,40 +606,20 @@ void gfx_draw_rect(int x, int y, int w, int h, u16 color) {
 
 void gfx_fill_rect(int x, int y, int w, int h, u16 color) {
     int j;
-    for (j = 0; j < h; j++) {
+    if (w <= 0 || h <= 0) return;
+    for (j = 0; j < h; ++j) {
         gfx_draw_fast_hline(x, y + j, w, color);
     }
 }
 
 void gfx_fill_screen(u16 color) {
-    int i;
-    u16 mapped = mono_to_color(color);
-    for (i = 0; i < ARDU_W * ARDU_H; i++) {
-        backbuffer[i] = mapped;
-    }
-    memset(dirty_rows, 1, sizeof(dirty_rows));
+    memset(mono_buffer, color ? 0xFF : 0x00, sizeof(mono_buffer));
+    memset(dirty_pages, 1, sizeof(dirty_pages));
     full_redraw_needed = true;
 }
 
 void gfx_draw_bitmap(int x, int y, const unsigned char* bmp, int w, int h) {
-    int sx, sy;
-    int pages;
-
-    if (!bmp || w <= 0 || h <= 0) return;
-
-    pages = (h + 7) / 8;
-
-    for (sx = 0; sx < w; sx++) {
-        for (sy = 0; sy < h; sy++) {
-            int page = sy / 8;
-            int bit = sy & 7;
-            int idx = sx + page * w;
-            int pixel = (bmp[idx] >> bit) & 1;
-            gfx_draw_pixel(x + sx, y + sy, pixel ? 1 : 0);
-        }
-    }
-
-    (void)pages;
+    blit_bytes_overwrite(x, y, bmp, w, h);
 }
 
 void gfx_draw_circle(int x0, int y0, int r, u16 color) {
@@ -372,7 +650,7 @@ void gfx_draw_circle(int x0, int y0, int r, u16 color) {
 void gfx_fill_circle(int x0, int y0, int r, u16 color) {
     int y;
 
-    for (y = -r; y <= r; y++) {
+    for (y = -r; y <= r; ++y) {
         int x;
         int span = 0;
 
@@ -380,8 +658,34 @@ void gfx_fill_circle(int x0, int y0, int r, u16 color) {
             span++;
         }
 
-        for (x = -span + 1; x <= span - 1; x++) {
+        for (x = -span + 1; x <= span - 1; ++x) {
             gfx_draw_pixel(x0 + x, y0 + y, color);
+        }
+    }
+}
+
+void gfx_draw_round_rect(int x, int y, int w, int h, int r, u16 color) {
+    int dx, dy;
+
+    if (w <= 0 || h <= 0) return;
+
+    if (r < 0) r = 0;
+    if (r * 2 > w) r = w / 2;
+    if (r * 2 > h) r = h / 2;
+
+    gfx_draw_fast_hline(x + r, y, w - 2 * r, color);
+    gfx_draw_fast_hline(x + r, y + h - 1, w - 2 * r, color);
+    gfx_draw_fast_vline(x, y + r, h - 2 * r, color);
+    gfx_draw_fast_vline(x + w - 1, y + r, h - 2 * r, color);
+
+    for (dy = -r; dy <= r; ++dy) {
+        for (dx = -r; dx <= r; ++dx) {
+            if (dx * dx + dy * dy <= r * r) {
+                if (dx <= 0 && dy <= 0) gfx_draw_pixel(x + r + dx, y + r + dy, color);
+                if (dx >= 0 && dy <= 0) gfx_draw_pixel(x + w - r - 1 + dx, y + r + dy, color);
+                if (dx <= 0 && dy >= 0) gfx_draw_pixel(x + r + dx, y + h - r - 1 + dy, color);
+                if (dx >= 0 && dy >= 0) gfx_draw_pixel(x + w - r - 1 + dx, y + h - r - 1 + dy, color);
+            }
         }
     }
 }
@@ -391,70 +695,51 @@ void gfx_draw_sprite_overwrite(int x, int y, const unsigned char* sprite, int fr
     const unsigned char* data;
 
     if (!sprite) return;
-
     w = sprite[0];
     h = sprite[1];
-    pages = (h + 7) / 8;
+    pages = (h + 7) >> 3;
     data = sprite + 2 + frame * (w * pages);
-
-    gfx_draw_bitmap(x, y, data, w, h);
+    blit_bytes_overwrite(x, y, data, w, h);
 }
 
 void gfx_draw_sprite_self_masked(int x, int y, const unsigned char* sprite, int frame) {
-    gfx_draw_sprite_overwrite(x, y, sprite, frame);
+    int w, h, pages;
+    const unsigned char* data;
+
+    if (!sprite) return;
+    w = sprite[0];
+    h = sprite[1];
+    pages = (h + 7) >> 3;
+    data = sprite + 2 + frame * (w * pages);
+    blit_bytes_self_masked(x, y, data, w, h);
 }
 
 void gfx_draw_sprite_erase(int x, int y, const unsigned char* sprite, int frame) {
-    int w, h, sx, sy, pages;
+    int w, h, pages;
     const unsigned char* data;
 
     if (!sprite) return;
-
     w = sprite[0];
     h = sprite[1];
-    pages = (h + 7) / 8;
+    pages = (h + 7) >> 3;
     data = sprite + 2 + frame * (w * pages);
-
-    for (sx = 0; sx < w; sx++) {
-        for (sy = 0; sy < h; sy++) {
-            int page = sy / 8;
-            int bit = sy & 7;
-            int idx = sx + page * w;
-            if ((data[idx] >> bit) & 1) {
-                gfx_draw_pixel(x + sx, y + sy, 0);
-            }
-        }
-    }
+    blit_bytes_erase(x, y, data, w, h);
 }
 
 void gfx_draw_sprite_plus_mask(int x, int y, const unsigned char* sprite, int frame) {
-    int w, h, sx, sy, pages;
+    int w, h, pages;
     const unsigned char* data;
 
     if (!sprite) return;
-
     w = sprite[0];
     h = sprite[1];
-    pages = (h + 7) / 8;
+    pages = (h + 7) >> 3;
     data = sprite + 2 + frame * (w * pages * 2);
-
-    for (sx = 0; sx < w; sx++) {
-        for (sy = 0; sy < h; sy++) {
-            int page = sy / 8;
-            int bit = sy & 7;
-            int idx = (sx + page * w) * 2;
-            int image_bit = (data[idx] >> bit) & 1;
-            int mask_bit = (data[idx + 1] >> bit) & 1;
-
-            if (mask_bit) {
-                gfx_draw_pixel(x + sx, y + sy, image_bit);
-            }
-        }
-    }
+    blit_bytes_plus_mask(x, y, data, w, h);
 }
 
 void gfx_draw_sprite_external_mask(int x, int y, const unsigned char* sprite, const unsigned char* mask, int frame, int mask_frame) {
-    int w, h, sx, sy, pages;
+    int w, h, pages;
     const unsigned char* image_data;
     const unsigned char* mask_data;
 
@@ -462,23 +747,11 @@ void gfx_draw_sprite_external_mask(int x, int y, const unsigned char* sprite, co
 
     w = sprite[0];
     h = sprite[1];
-    pages = (h + 7) / 8;
+    pages = (h + 7) >> 3;
     image_data = sprite + 2 + frame * (w * pages);
     mask_data = mask + 2 + mask_frame * (w * pages);
 
-    for (sx = 0; sx < w; sx++) {
-        for (sy = 0; sy < h; sy++) {
-            int page = sy / 8;
-            int bit = sy & 7;
-            int idx = sx + page * w;
-            int image_bit = (image_data[idx] >> bit) & 1;
-            int mask_bit = (mask_data[idx] >> bit) & 1;
-
-            if (mask_bit) {
-                gfx_draw_pixel(x + sx, y + sy, image_bit);
-            }
-        }
-    }
+    blit_bytes_external_mask(x, y, image_data, mask_data, w, h);
 }
 
 void gfx_set_cursor(int x, int y) {
@@ -519,7 +792,7 @@ void gfx_set_text_bg(int c) {
 void gfx_set_invert(bool enable) {
     if (invert_enabled != enable) {
         invert_enabled = enable;
-        memset(dirty_rows, 1, sizeof(dirty_rows));
+        memset(dirty_pages, 1, sizeof(dirty_pages));
         full_redraw_needed = true;
     }
 }
@@ -535,9 +808,6 @@ void gfx_write_char(char c) {
     int col, row;
     int cell_w = 6 * text_size;
     int cell_h = 8 * text_size;
-    u16 fg = mono_to_color(text_color);
-    u16 bg = mono_to_color(text_bg);
-    int y_start, y_end;
 
     if (!text_raw) {
         if (c == '\n') {
@@ -561,101 +831,53 @@ void gfx_write_char(char c) {
         glyph = (unsigned char)c - 32;
     }
 
-    y_start = cursor_y;
-    y_end = cursor_y + cell_h - 1;
-    if (y_start < 0) y_start = 0;
-    if (y_end >= ARDU_H) y_end = ARDU_H - 1;
-    for (row = y_start; row <= y_end; row++) {
-        mark_row_dirty(row);
-    }
-
     if (text_size == 1) {
-        for (col = 0; col < 5; col++) {
+        for (col = 0; col < 5; ++col) {
             unsigned char bits = font5x7[glyph][col];
-            int px = cursor_x + col;
-
-            if (px < 0 || px >= ARDU_W) {
-                continue;
-            }
-
-            for (row = 0; row < 7; row++) {
-                int py = cursor_y + row;
-                if (py < 0 || py >= ARDU_H) {
-                    continue;
-                }
-                backbuffer[py * ARDU_W + px] = ((bits >> row) & 1) ? fg : bg;
+            for (row = 0; row < 7; ++row) {
+                mono_set_pixel_raw(cursor_x + col, cursor_y + row, ((bits >> row) & 1) ? text_color : text_bg);
             }
         }
 
-        {
-            int x = cursor_x + 5;
-            if (x >= 0 && x < ARDU_W) {
-                for (row = 0; row < 8; row++) {
-                    int py = cursor_y + row;
-                    if (py < 0 || py >= ARDU_H) {
-                        continue;
-                    }
-                    backbuffer[py * ARDU_W + x] = bg;
-                }
-            }
+        for (row = 0; row < 8; ++row) {
+            mono_set_pixel_raw(cursor_x + 5, cursor_y + row, text_bg);
         }
-
-        {
-            int py = cursor_y + 7;
-            if (py >= 0 && py < ARDU_H) {
-                int start_x = cursor_x;
-                int end_x = cursor_x + 5;
-                if (start_x < 0) start_x = 0;
-                if (end_x >= ARDU_W) end_x = ARDU_W - 1;
-                for (col = start_x; col <= end_x; col++) {
-                    backbuffer[py * ARDU_W + col] = bg;
-                }
-            }
+        for (col = 0; col < 6; ++col) {
+            mono_set_pixel_raw(cursor_x + col, cursor_y + 7, text_bg);
         }
 
         cursor_x += cell_w;
         return;
     }
 
-    for (col = 0; col < 5; col++) {
+    for (col = 0; col < 5; ++col) {
         unsigned char bits = font5x7[glyph][col];
-        for (row = 0; row < 7; row++) {
+        for (row = 0; row < 7; ++row) {
+            int bit = ((bits >> row) & 1) ? text_color : text_bg;
             int px, py;
-            u16 mapped = ((bits >> row) & 1) ? fg : bg;
-
-            for (py = 0; py < text_size; py++) {
-                for (px = 0; px < text_size; px++) {
-                    put_pixel_direct(
+            for (py = 0; py < text_size; ++py) {
+                for (px = 0; px < text_size; ++px) {
+                    mono_set_pixel_raw(
                         cursor_x + col * text_size + px,
                         cursor_y + row * text_size + py,
-                        mapped
+                        bit
                     );
                 }
             }
         }
     }
 
-    for (row = 0; row < cell_h; row++) {
-        int py = cursor_y + row;
+    for (row = 0; row < cell_h; ++row) {
         int px;
-        if (py < 0 || py >= ARDU_H) continue;
-        for (px = 0; px < text_size; px++) {
-            int x = cursor_x + 5 * text_size + px;
-            if (x >= 0 && x < ARDU_W) {
-                backbuffer[py * ARDU_W + x] = bg;
-            }
+        for (px = 0; px < text_size; ++px) {
+            mono_set_pixel_raw(cursor_x + 5 * text_size + px, cursor_y + row, text_bg);
         }
     }
 
-    for (col = 0; col < cell_w; col++) {
-        int x = cursor_x + col;
+    for (col = 0; col < cell_w; ++col) {
         int py;
-        if (x < 0 || x >= ARDU_W) continue;
-        for (py = 0; py < text_size; py++) {
-            int y = cursor_y + 7 * text_size + py;
-            if (y >= 0 && y < ARDU_H) {
-                backbuffer[y * ARDU_W + x] = bg;
-            }
+        for (py = 0; py < text_size; ++py) {
+            mono_set_pixel_raw(cursor_x + col, cursor_y + 7 * text_size + py, text_bg);
         }
     }
 

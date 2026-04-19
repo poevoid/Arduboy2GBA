@@ -1,35 +1,34 @@
-#include <gba_input.h>
 #include "input.h"
 
-#define AB_KEY_MASK 0x03FF
+#include <gba_input.h>
 
-static u16 curr = 0;
-static u16 prev = 0;
-
-static inline u16 read_keys_now(void) {
-    return (u16)(~REG_KEYINPUT) & AB_KEY_MASK;
-}
+static u16 g_prev = 0;
+static u16 g_curr = 0;
+static u16 g_just = 0;
 
 void input_poll(void) {
-    prev = curr;
-    curr = read_keys_now();
+    scanKeys();
+    g_prev = g_curr;
+    g_curr = keysHeld();
+    g_just = (u16)(g_curr & (u16)~g_prev);
 }
 
 bool input_pressed(u16 key) {
-    u16 now;
-
-    if (key == 0) {
-        return false;
-    }
-
-    now = read_keys_now();
-    return (now & key) == key;
+    return (g_curr & key) == key;
 }
 
 bool input_just_pressed(u16 key) {
-    if (key == 0) {
-        return false;
-    }
+    return (g_just & key) == key;
+}
 
-    return ((curr & key) == key) && ((prev & key) != key);
+u16 input_current(void) {
+    return g_curr;
+}
+
+u16 input_previous(void) {
+    return g_prev;
+}
+
+u16 input_just_pressed_mask(void) {
+    return g_just;
 }

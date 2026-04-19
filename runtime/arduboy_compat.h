@@ -4,6 +4,9 @@
 #include <gba_types.h>
 #include <gba_input.h>
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
 
 #define WIDTH 128
 #define HEIGHT 64
@@ -30,6 +33,33 @@
 #ifndef pgm_read_word
 #define pgm_read_word(addr) (*(const unsigned short *)(addr))
 #endif
+
+#ifndef pgm_read_ptr
+#define pgm_read_ptr(addr) ((uintptr_t)(*(const void * const *)(addr)))
+#endif
+
+#ifndef bitRead
+#define bitRead(value, bit) (((value) >> (bit)) & 0x01)
+#endif
+
+template <typename T>
+static inline T min(T a, T b) {
+    return (a < b) ? a : b;
+}
+
+template <typename T>
+static inline T max(T a, T b) {
+    return (a > b) ? a : b;
+}
+
+static inline char* ltoa(long value, char* str, int base) {
+    if (base == 16) {
+        snprintf(str, 34, "%lX", value);
+    } else {
+        snprintf(str, 34, "%ld", value);
+    }
+    return str;
+}
 
 #define A_BUTTON     KEY_A
 #define B_BUTTON     KEY_B
@@ -64,6 +94,7 @@
 void ab_begin(void);
 void ab_beginNoLogo(void);
 void ab_initRandomSeed(void);
+void ab_bootLogoSpritesSelfMasked(void);
 
 void ab_clear(void);
 void ab_display(void);
@@ -79,6 +110,7 @@ void ab_fillScreen(int c = BLACK);
 void ab_drawCircle(int x, int y, int r, int c = WHITE);
 void ab_fillCircle(int x, int y, int r, int c = WHITE);
 void ab_drawLine(int x0, int y0, int x1, int y1, int c = WHITE);
+void ab_drawRoundRect(int x, int y, int w, int h, int r, int c = WHITE);
 void ab_drawBitmap(int x, int y, const unsigned char* bmp, int w, int h, int c = WHITE);
 
 void ab_drawOverwrite(int x, int y, const unsigned char* sprite, int frame = 0);
@@ -114,13 +146,17 @@ void ab_println(float v);
 void ab_pollButtons(void);
 bool ab_pressed(u16 key);
 bool ab_justPressed(u16 key);
+bool ab_notPressed(u16 key);
 
 void ab_setFrameRate(int fps);
 bool ab_nextFrame(void);
+bool ab_everyXFrames(int frames);
 void ab_delay(int ms);
 void ab_idle(void);
 
+int ab_random(int max);
 int ab_random(int min, int max);
+float ab_radians(float deg);
 void ab_tone(int freq, int duration = 0);
 void ab_noTone(void);
 void ab_playScore(const unsigned char* score);
@@ -153,6 +189,22 @@ public:
     unsigned char read(int address) const;
     void write(int address, unsigned char value);
     void update(int address, unsigned char value);
+
+    template <typename T>
+    void get(int address, T& value) const {
+        unsigned char* dst = reinterpret_cast<unsigned char*>(&value);
+        for (size_t i = 0; i < sizeof(T); ++i) {
+            dst[i] = read(address + (int)i);
+        }
+    }
+
+    template <typename T>
+    void put(int address, const T& value) {
+        const unsigned char* src = reinterpret_cast<const unsigned char*>(&value);
+        for (size_t i = 0; i < sizeof(T); ++i) {
+            update(address + (int)i, src[i]);
+        }
+    }
 };
 
 extern EEPROMClass EEPROM;
@@ -176,8 +228,10 @@ public:
 
     ArduboyAudioShim() : enabled(this) {}
 
+    void begin() {}
     void on() { ab_audio_on(); }
     void off() { ab_audio_off(); }
+    void saveOnOff() {}
     bool isEnabled() const { return ab_audio_enabled(); }
 };
 
@@ -191,12 +245,27 @@ inline ArduboyAudioEnabledProxy::operator bool() const {
     return ab_audio_enabled();
 }
 
+class ArduboyTones {
+public:
+    ArduboyTones() {}
+    template <typename T>
+    explicit ArduboyTones(T) {}
+
+    void tone(unsigned int frequency, unsigned long duration = 0) {
+        if (ab_audio_enabled()) {
+            ab_tone((int)frequency, (int)duration);
+        }
+    }
+};
+
 class Arduboy2Base {
 public:
     ArduboyAudioShim audio;
 
     void begin() { ab_begin(); }
     void beginNoLogo() { ab_beginNoLogo(); }
+    void boot() { ab_begin(); }
+    void bootLogoSpritesSelfMasked() { ab_bootLogoSpritesSelfMasked(); }
     void initRandomSeed() { ab_initRandomSeed(); }
 
     void clear() { ab_clear(); }
@@ -213,6 +282,7 @@ public:
     void drawCircle(int x, int y, int r, int c = WHITE) { ab_drawCircle(x, y, r, c); }
     void fillCircle(int x, int y, int r, int c = WHITE) { ab_fillCircle(x, y, r, c); }
     void drawLine(int x0, int y0, int x1, int y1, int c = WHITE) { ab_drawLine(x0, y0, x1, y1, c); }
+    void drawRoundRect(int x, int y, int w, int h, int r, int c = WHITE) { ab_drawRoundRect(x, y, w, h, r, c); }
     void drawBitmap(int x, int y, const unsigned char* bmp, int w, int h, int c = WHITE) { ab_drawBitmap(x, y, bmp, w, h, c); }
     void drawSlowXYBitmap(int x, int y, const unsigned char* bmp, int w, int h, int c = WHITE) { ab_drawBitmap(x, y, bmp, w, h, c); }
 
@@ -248,9 +318,11 @@ public:
     void pollButtons() { ab_pollButtons(); }
     bool pressed(u16 key) { return ab_pressed(key); }
     bool justPressed(u16 key) { return ab_justPressed(key); }
+    bool notPressed(u16 key) { return ab_notPressed(key); }
 
     void setFrameRate(int fps) { ab_setFrameRate(fps); }
     bool nextFrame() { return ab_nextFrame(); }
+    bool everyXFrames(int frames) { return ab_everyXFrames(frames); }
     void idle() { ab_idle(); }
 
     void delayShort(unsigned long ms) { ab_delay((int)ms); }
@@ -283,8 +355,7 @@ public:
 
     template <typename T>
     constexpr unsigned int freq(T hz) const {
-        double value = (double)hz;
-        return (value <= 0.0) ? 0u : (unsigned int)(value + 0.5);
+        return (hz <= 0) ? 0u : (unsigned int)(hz + 0.5);
     }
 
     void tone(unsigned int freq_hz, unsigned long dur = 0) {

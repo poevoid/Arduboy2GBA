@@ -1,3 +1,4 @@
+#define ARDUBOY_COMPAT_IMPLEMENTATION
 #include "arduboy_compat.h"
 #include "graphics.h"
 #include "input.h"
@@ -6,22 +7,19 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 #include <gba_systemcalls.h>
 
 #define GBA_SRAM_BASE ((volatile unsigned char*)0x0E000000)
 #define GBA_SRAM_SIZE 0x10000
 
-/*
-    Many emulators/patchers/loaders look for one of Nintendo's save type
-    marker strings in the ROM image. Keeping this in the binary helps the
-    ROM get recognized as SRAM-backed.
-*/
 __attribute__((used))
 static const char g_gba_save_type_string[] = "SRAM_V113";
 
 static int g_frame_rate = 60;
 static int g_frame_duration_vblanks = 1;
 static int g_frame_counter = 0;
+static int g_frame_count = 0;
 static float g_time_scale = 1.0f;
 static bool g_audio_enabled = true;
 static bool g_input_polled_this_frame = false;
@@ -29,6 +27,8 @@ static bool g_input_polled_this_frame = false;
 static u8 g_led_r = 0;
 static u8 g_led_g = 0;
 static u8 g_led_b = 0;
+
+static uint32_t g_rng_state = 0xA341316Cu;
 
 Arduboy2Base arduboy;
 EEPROMClass EEPROM;
@@ -60,6 +60,18 @@ static void print_unsigned_base(unsigned int v, int base) {
 
     snprintf(buf, sizeof(buf), "%u", v);
     gfx_write_string(buf);
+}
+
+static uint32_t xorshift32(void) {
+    uint32_t x = g_rng_state;
+    if (x == 0) {
+        x = 0x6D2B79F5u;
+    }
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    g_rng_state = x;
+    return x;
 }
 
 unsigned char EEPROMClass::read(int address) const {
@@ -104,6 +116,7 @@ void ab_begin(void) {
     g_frame_rate = 60;
     g_frame_duration_vblanks = 1;
     g_frame_counter = 0;
+    g_frame_count = 0;
     g_audio_enabled = true;
 
     g_led_r = 0;
@@ -116,8 +129,15 @@ void ab_beginNoLogo(void) {
     ab_begin();
 }
 
+void ab_bootLogoSpritesSelfMasked(void) {
+    /* no-op for now */
+}
+
 void ab_initRandomSeed(void) {
-    srand(1);
+    g_rng_state = 0xA341316Cu ^ (uint32_t)(g_frame_count * 1103515245u + 12345u);
+    if (g_rng_state == 0) {
+        g_rng_state = 1;
+    }
 }
 
 void ab_clear(void) {
@@ -195,6 +215,10 @@ void ab_drawLine(int x0, int y0, int x1, int y1, int c) {
             }
         }
     }
+}
+
+void ab_drawRoundRect(int x, int y, int w, int h, int r, int c) {
+    gfx_draw_round_rect(x, y, w, h, r, c);
 }
 
 void ab_drawBitmap(int x, int y, const unsigned char* bmp, int w, int h, int c) {
@@ -335,6 +359,10 @@ bool ab_justPressed(u16 key) {
     return input_just_pressed(key);
 }
 
+bool ab_notPressed(u16 key) {
+    return !ab_pressed(key);
+}
+
 void ab_setFrameRate(int fps) {
     int scaled_fps;
     float vblank_frames;
@@ -373,12 +401,20 @@ bool ab_nextFrame(void) {
         audio_update();
         input_poll();
         g_input_polled_this_frame = true;
+        g_frame_count++;
         return true;
     }
 
     VBlankIntrWait();
     audio_update();
     return false;
+}
+
+bool ab_everyXFrames(int frames) {
+    if (frames <= 0) {
+        return false;
+    }
+    return (g_frame_count % frames) == 0;
 }
 
 void ab_delay(int ms) {
@@ -415,11 +451,22 @@ void ab_idle(void) {
     g_input_polled_this_frame = true;
 }
 
+int ab_random(int max) {
+    if (max <= 0) {
+        return 0;
+    }
+    return (int)(xorshift32() % (uint32_t)max);
+}
+
 int ab_random(int min, int max) {
     if (max <= min) {
         return min;
     }
-    return min + rand() % (max - min);
+    return min + (int)(xorshift32() % (uint32_t)(max - min));
+}
+
+float ab_radians(float deg) {
+    return deg * (3.14159265f / 180.0f);
 }
 
 void ab_tone(int freq, int duration) {
